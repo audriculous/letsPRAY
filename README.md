@@ -65,3 +65,5 @@ npm test        # unit tests for merging, sessions and tag suggestions
 | `sw.js` | Offline cache. Bump `VERSION` when you change files |
 
 To add or adjust tag themes, edit `THEMES` in `js/tags.js`.
+
+The app icon is the wordmark drawn from the bundled fonts. To regenerate it: `python3 scripts/icon-svg.py .` then `node scripts/icon-png.cjs .`
