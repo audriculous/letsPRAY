@@ -118,7 +118,8 @@ export function markPrayed(id) {
   if (!item) return;
   const t = now();
   data.items[id] = { ...item, lastPrayedAt: t, prayedCount: (item.prayedCount || 0) + 1, updatedAt: t };
-  data.days[dayKey(t)] = true;
+  const key = dayKey(t);
+  data.days[key] = (data.days[key] === true ? 1 : Number(data.days[key]) || 0) + 1;
   commit();
 }
 

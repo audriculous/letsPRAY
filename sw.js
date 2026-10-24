@@ -1,5 +1,5 @@
 // Offline app shell. Bump VERSION whenever files change so devices update.
-const VERSION = 'letspray-v1';
+const VERSION = 'letspray-v2';
 const SHELL = [
   './',
   './index.html',
@@ -15,6 +15,14 @@ const SHELL = [
   './icons/icon.svg',
   './icons/icon-192.png',
   './icons/apple-touch-icon.png',
+  './fonts/barlow-400.woff2',
+  './fonts/barlow-500.woff2',
+  './fonts/barlow-600.woff2',
+  './fonts/barlow-700.woff2',
+  './fonts/barlow-condensed-600.woff2',
+  './fonts/barlow-condensed-700.woff2',
+  './fonts/barlow-condensed-700i.woff2',
+  './fonts/barlow-condensed-800i.woff2',
 ];
 
 self.addEventListener('install', (e) => {

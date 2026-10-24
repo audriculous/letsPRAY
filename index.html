@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Let’s Pray</title>
   <meta name="description" content="A calm, tidy prayer list for your people, family, church and mission.">
-  <meta name="theme-color" content="#f5f2ec" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#171615" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#efede8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#131211" media="(prefers-color-scheme: dark)">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -14,12 +14,14 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="preload" href="fonts/barlow-condensed-800i.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/barlow-500.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
   <div class="app">
     <nav class="nav" aria-label="Main">
-      <div class="brand"><img src="icons/icon.svg" alt="" width="28" height="28"><span>Let’s Pray</span></div>
+      <a class="brand wordmark" href="#/today"><span class="wm-a">Let’s</span><span class="wm-b">Pray</span><span class="wm-c"></span></a>
       <a href="#/today" data-tab="today"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/><circle cx="12" cy="15" r="1.6"/></svg><span>Today</span></a>
       <a href="#/lists" data-tab="lists"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 6.5h12M8.5 12h12M8.5 17.5h12"/><circle cx="4" cy="6.5" r=".9"/><circle cx="4" cy="12" r=".9"/><circle cx="4" cy="17.5" r=".9"/></svg><span>Lists</span></a>
       <a href="#/answered" data-tab="answered"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5c.6 4.3 2.2 5.9 6.5 6.5-4.3.6-5.9 2.2-6.5 6.5-.6-4.3-2.2-5.9-6.5-6.5 4.3-.6 5.9-2.2 6.5-6.5z"/><path d="M5 20.5h14"/></svg><span>Answered</span></a>

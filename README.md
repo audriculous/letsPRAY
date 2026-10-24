@@ -5,6 +5,7 @@ A calm, tidy prayer list that runs as a web app on iPhone and Mac and keeps both
 ## What it does
 
 - **Lists**: People, Family, Church and Mission to start with. Add, rename, recolour, reorder or delete lists, and choose how many points from each list come up per session.
+- **Today**: a greeting (set your name in Settings), an *Up next* card with **Start**, a *Shorter / As planned / Longer* choice for today's session, and a *This week* card showing days prayed, prayers, answered prayers and your streak.
 - **Prayer sessions**: one card at a time. Tap *Prayed* (or swipe left; on Mac use the arrow keys), *Skip*, or *Answered*. The least recently prayed points come first.
 - **Tags** on every prayer point, with two kinds of suggestion while you type:
   - *Suggested*: based on what the prayer is about. Theme words (surgery → Health, exams → Study, missionary → Missionaries and so on), names in the text, existing tags mentioned in the text, and words you have tagged before (it learns from your own tagging).
@@ -12,6 +13,8 @@ A calm, tidy prayer list that runs as a web app on iPhone and Mac and keeps both
 - **Answered journal**: mark a prayer as answered with a note on how God answered, and look back over them later.
 - **Search** across every prayer point, note and tag, and browse by tag.
 - Light and dark mode, works offline, a short NIV verse on prayer each day.
+
+The look follows Lemme Werk Out (bold condensed italic headings, soft cards on warm grey, one accent colour) with the colours toned down to dusty rose and sage. Fonts are Barlow and Barlow Condensed, bundled in `fonts/` under the SIL Open Font Licence (`fonts/OFL.txt`).
 
 ## Using it
 

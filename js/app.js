@@ -1,6 +1,6 @@
 import * as S from './store.js';
 import * as Sync from './sync.js';
-import { activeCategories, itemsIn, answeredItems, buildSession, streak, allTags, live, dayKey, merge, COLOURS } from './model.js';
+import { activeCategories, itemsIn, answeredItems, buildSession, streak, weekStats, allTags, live, dayKey, merge, COLOURS } from './model.js';
 import { suggestTags } from './tags.js';
 import { icon, CATEGORY_ICONS } from './icons.js';
 import { verseFor } from './verses.js';
@@ -28,9 +28,24 @@ function ago(ts) {
 
 const longDate = (ts) => new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
 
+const shortDate = (ts) => new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+
 function greeting() {
   const h = new Date().getHours();
-  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+  const part = h < 12 ? 'Morning' : h < 18 ? 'Afternoon' : 'Evening';
+  const name = (S.getPrefs().name || '').trim();
+  return name ? `${part}, ${esc(name)}` : `Good ${part.toLowerCase()}`;
+}
+
+// Session length for today only, like a workout's "today's load".
+const SIZES = [
+  ['shorter', 'Shorter', 0.5, 'A shorter session today.'],
+  ['planned', 'As planned', 1, 'Your usual session.'],
+  ['longer', 'Longer', 2, 'A longer session today.'],
+];
+function sessionSize() {
+  const pref = S.getPrefs().sessionSize;
+  return SIZES.find(([id]) => pref && pref.day === dayKey() && pref.size === id) || SIZES[1];
 }
 
 // Keep the user's spelling of an existing tag; capitalise new ones.
@@ -65,8 +80,8 @@ function header(title, { kicker = '', back = '', actions = '' } = {}) {
   return `<header class="page-head">
     ${back ? `<a class="icon-btn back" href="${back}" aria-label="Back">${icon('back')}</a>` : ''}
     <div class="page-title">
-      ${kicker ? `<div class="kicker">${kicker}</div>` : ''}
-      <h1>${title}</h1>
+      ${kicker ? `<div class="eyebrow">${kicker}</div>` : ''}
+      <h1 class="display">${title}</h1>
     </div>
     <div class="page-actions">${actions}</div>
   </header>`;
@@ -85,54 +100,73 @@ const VIEWS = {};
 
 VIEWS.today = () => {
   const data = S.getData();
-  const cards = buildSession(data);
+  const size = sessionSize();
+  const cards = buildSession(data, size[2]);
   const prayedToday = !!data.days[dayKey()];
-  const days = streak(data);
   const verse = verseFor();
   const total = Object.values(data.items).filter((i) => live(i) && !i.answeredAt).length;
+  const week = weekStats(data);
+
+  const topbar = `<div class="topbar">
+    <a class="wordmark" href="#/today"><span class="wm-a">Let’s</span><span class="wm-b">Pray</span><span class="wm-c"></span></a>
+    <div class="topbar-actions">
+      <a class="round-btn" href="#/lists" data-act="focus-search" aria-label="Search">${icon('search')}</a>
+      <button class="round-btn" data-act="new-item" aria-label="New prayer point">${icon('plus')}</button>
+      <a class="round-btn" href="#/settings" aria-label="Settings">${icon('settings')}</a>
+    </div>
+  </div>`;
 
   let hero;
   if (!total) {
-    hero = `<section class="hero">
-      <div class="hero-kicker">Welcome</div>
-      <h2>Start your prayer lists</h2>
-      <p>Add the people, family, church and mission work you want to pray for. Each session brings a few from every list, so everyone comes round in turn.</p>
-      <button class="btn btn-primary" data-act="new-item">${icon('plus')} Add a prayer point</button>
+    hero = `<section class="card hero">
+      <div class="eyebrow">Welcome. Let’s get started</div>
+      <h2 class="display">Your prayer lists</h2>
+      <p class="muted">Add the people, family, church and mission work you want to pray for. Each session brings up a few from every list, so everyone comes round in turn.</p>
+      <button class="btn btn-accent btn-wide" data-act="new-item">${icon('plus')} Add a prayer point</button>
     </section>`;
   } else {
+    const lists = [...new Set(cards.map((c) => c.categoryId))].map((id) => data.categories[id].name);
+    const eyebrow = lists.length > 3 ? `${lists.slice(0, 2).join(' + ')} + ${lists.length - 2} more` : lists.join(' + ');
+    const first = cards[0] && data.items[cards[0].itemId];
     const mins = Math.max(1, Math.round(cards.length * 0.75));
-    hero = `<section class="hero">
-      <div class="hero-kicker">${prayedToday ? `${icon('check')} Prayed today` : 'Ready when you are'}</div>
-      <h2>${prayedToday ? 'Pray again?' : 'Time to pray'}</h2>
-      <p>${plural(cards.length, 'prayer point')} from ${plural(new Set(cards.map((c) => c.categoryId)).size, 'list')} · about ${mins} min</p>
-      <div class="hero-row">
-        <a class="btn btn-primary btn-lg" href="#/pray" data-act="begin">Begin praying</a>
-        ${days ? `<span class="streak">${icon('sun')} ${plural(days, 'day')} in a row</span>` : ''}
+    hero = `<section class="card hero">
+      <div class="eyebrow">Up next. ${esc(eyebrow)}</div>
+      <div class="hero-top">
+        <h2 class="display">${prayedToday ? 'Pray again' : 'Today’s prayers'}</h2>
+        <a class="btn btn-accent btn-start" href="#/pray" data-act="begin">Start</a>
       </div>
+      <p class="muted">${prayedToday ? 'Prayed today. ' : ''}${plural(cards.length, 'prayer point')} · about ${mins} min</p>
+      <div class="label">Session length</div>
+      <div class="options" role="radiogroup">${SIZES.map(
+        ([id, label]) => `<button role="radio" aria-checked="${id === size[0]}" data-act="size" data-size="${id}">${label}</button>`,
+      ).join('')}</div>
+      ${first ? `<p class="hero-first"><b>First up: ${esc(first.title)}</b><span>From ${esc(data.categories[first.categoryId].name)}. ${size[3]}</span></p>` : ''}
     </section>`;
   }
+
+  const tile = (n, label) => `<div class="tile"><b>${n}</b><span>${label}</span></div>`;
+  const weekCard = `<section class="card panel">
+    <div class="panel-head">${icon('today')}<h3>This week</h3><span class="panel-meta">${shortDate(week.from)} to ${shortDate(week.to)}</span></div>
+    <div class="tiles">${tile(week.daysPrayed, week.daysPrayed === 1 ? 'Day' : 'Days')}${tile(week.prayers, week.prayers === 1 ? 'Prayer' : 'Prayers')}${tile(week.answered, 'Answered')}${tile(streak(data), 'Streak')}</div>
+    <p class="panel-foot">“${esc(verse.text)}” <span>${esc(verse.ref)}</span></p>
+  </section>`;
 
   const groups = activeCategories(data)
     .map((cat) => ({ cat, items: cards.filter((c) => c.categoryId === cat.id).map((c) => data.items[c.itemId]) }))
     .filter((g) => g.items.length);
 
-  return `${header(greeting(), { kicker: new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }) })}
+  return `${topbar}
+    <h1 class="greeting display">${greeting()}</h1>
     ${hero}
-    ${
-      groups.length
-        ? `<h3 class="section-title">In today's session</h3>
-      <div class="stack">${groups
-        .map(
-          (g) => `<div class="group">
-          <a class="group-head" href="#/list/${g.cat.id}" style="${catColour(g.cat)}">${icon(g.cat.icon, 'cat-ic')}<span>${esc(g.cat.name)}</span></a>
-          <div class="card list">${g.items.map((i) => itemRow(i)).join('')}</div>
-        </div>`,
-        )
-        .join('')}</div>`
-        : ''
-    }
-    <figure class="verse"><blockquote>${esc(verse.text)}</blockquote><figcaption>${esc(verse.ref)} (NIV)</figcaption></figure>
-    ${fab()}`;
+    ${total ? weekCard : ''}
+    ${groups
+      .map(
+        (g) => `<section class="card panel" style="${catColour(g.cat)}">
+        <a class="panel-head" href="#/list/${g.cat.id}">${icon(g.cat.icon)}<h3>${esc(g.cat.name)}</h3><span class="panel-meta">${g.items.length} of ${itemsIn(data, g.cat.id).length} ${icon('chevron')}</span></a>
+        <div class="list">${g.items.map((i) => itemRow(i)).join('')}</div>
+      </section>`,
+      )
+      .join('')}`;
 };
 
 let query = '';
@@ -268,6 +302,11 @@ VIEWS.settings = () => {
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
   return `${header('Settings')}
+  <h3 class="section-title">You</h3>
+  <div class="card pad">
+    <label class="name-row"><span>Your name</span><input id="name" value="${esc(prefs.name || '')}" placeholder="For the greeting on Today" maxlength="24" autocomplete="given-name"></label>
+  </div>
+
   <h3 class="section-title">Sync</h3>
   <div id="sync-section">${syncSection()}</div>
 
@@ -321,7 +360,7 @@ VIEWS.settings = () => {
 let session = null;
 
 function startSession() {
-  session = { cards: buildSession(S.getData()), index: 0, prayed: 0 };
+  session = { cards: buildSession(S.getData(), sessionSize()[2]), index: 0, prayed: 0 };
 }
 
 VIEWS.pray = () => {
@@ -346,10 +385,10 @@ VIEWS.pray = () => {
     return `<div class="pray"><div class="pray-top">${close}</div>
       <div class="pray-done">
         <div class="done-mark">${icon('check')}</div>
-        <h2>Amen.</h2>
+        <h2 class="display">Amen.</h2>
         <p>You prayed for ${plural(session.prayed, 'prayer point')}${streak(data) > 1 ? ` · ${streak(data)} days in a row` : ''}.</p>
         <figure class="verse"><blockquote>${esc(verse.text)}</blockquote><figcaption>${esc(verse.ref)} (NIV)</figcaption></figure>
-        <button class="btn btn-primary btn-lg" data-act="pray-close">Done</button>
+        <button class="btn btn-accent btn-lg" data-act="pray-close">Done</button>
       </div></div>`;
   }
 
@@ -362,7 +401,7 @@ VIEWS.pray = () => {
       <span class="muted small">${index + 1} / ${cards.length}</span>
     </div>
     <article class="pray-card" id="pray-card">
-      <div class="pray-cat">${icon(cat?.icon || 'star')}${esc(cat?.name || '')}</div>
+      <div class="eyebrow pray-cat">${icon(cat?.icon || 'star')}${esc(cat?.name || '')}</div>
       <h2 class="pray-title">${esc(item.title)}</h2>
       ${item.notes ? `<p class="pray-notes">${esc(item.notes)}</p>` : ''}
       ${(item.tags || []).length ? `<div class="chips">${tagChips(item.tags)}</div>` : ''}
@@ -372,7 +411,7 @@ VIEWS.pray = () => {
       <button class="btn btn-quiet" data-act="pray-back" ${index === 0 ? 'disabled' : ''} aria-label="Previous">${icon('back')}</button>
       <button class="btn" data-act="pray-answered" data-id="${item.id}">${icon('answered')} Answered</button>
       <button class="btn btn-quiet" data-act="pray-skip">Skip</button>
-      <button class="btn btn-primary btn-lg pray-amen" data-act="pray-done" data-id="${item.id}">${icon('check')} Prayed</button>
+      <button class="btn btn-accent btn-lg pray-amen" data-act="pray-done" data-id="${item.id}">${icon('check')} Prayed</button>
     </div>
     <p class="pray-hint muted small">Swipe left when you have prayed · ← → keys on Mac</p>
   </div>`;
@@ -739,6 +778,11 @@ const ACTIONS = {
   'new-cat': () => openCategorySheet(),
   'edit-cat': (b) => openCategorySheet(b.dataset.id),
   begin: () => startSession(),
+  size: (b) => {
+    S.setPrefs({ sessionSize: { day: dayKey(), size: b.dataset.size } });
+    render();
+  },
+  'focus-search': () => setTimeout(() => $('#search')?.focus(), 50),
   'pray-done': (b) => prayAdvance(b.dataset.id),
   'pray-skip': () => prayAdvance(),
   'pray-back': () => {
@@ -817,6 +861,10 @@ document.addEventListener('submit', async (e) => {
     btn.textContent = 'Connect';
   }
   render();
+});
+
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'name') S.setPrefs({ name: e.target.value.trim() });
 });
 
 document.addEventListener('input', (e) => {

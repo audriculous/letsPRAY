@@ -50,6 +50,15 @@ function mergeRecords(a = {}, b = {}) {
   return out;
 }
 
+// Prayers per day. Older data stored `true`, which counts as one. Taking the
+// higher count means the same day prayed on two devices is not double counted.
+const dayCount = (v) => (v === true ? 1 : Number(v) || 0);
+function mergeDays(a, b) {
+  const out = {};
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) out[k] = Math.max(dayCount(a[k]), dayCount(b[k]));
+  return out;
+}
+
 export function merge(local, remote) {
   const a = normalise(local);
   const b = normalise(remote);
@@ -57,8 +66,7 @@ export function merge(local, remote) {
     version: SCHEMA_VERSION,
     categories: mergeRecords(a.categories, b.categories),
     items: mergeRecords(a.items, b.items),
-    // Days prayed only ever accumulate.
-    days: { ...a.days, ...b.days },
+    days: mergeDays(a.days, b.days),
   };
 }
 
@@ -71,7 +79,7 @@ export function fingerprint(data) {
   return JSON.stringify([
     sortObj(data.categories),
     sortObj(data.items),
-    Object.keys(data.days).sort(),
+    sortObj(data.days),
   ]);
 }
 
@@ -97,13 +105,16 @@ export function answeredItems(data) {
 
 // Prayer Mate style rotation: each category offers its `perSession` least
 // recently prayed points, so everything comes round in turn.
-export function buildSession(data) {
+// scale shortens or lengthens a session (e.g. 0.5 or 2) without changing
+// each list's usual count; a list set to 0 stays at 0.
+export function buildSession(data, scale = 1) {
   const cards = [];
   for (const cat of activeCategories(data)) {
     const pool = itemsIn(data, cat.id).sort(
       (x, y) => (x.lastPrayedAt || 0) - (y.lastPrayedAt || 0) || (x.createdAt || 0) - (y.createdAt || 0),
     );
-    const take = Math.max(0, cat.perSession ?? 2);
+    const usual = Math.max(0, cat.perSession ?? 2);
+    const take = usual ? Math.max(1, Math.round(usual * scale)) : 0;
     pool.slice(0, take).forEach((item) => cards.push({ itemId: item.id, categoryId: cat.id }));
   }
   return cards;
@@ -141,4 +152,19 @@ export function allTags(data) {
     }
   }
   return [...counts.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+}
+
+// Totals for the seven days ending today.
+export function weekStats(data, now = Date.now()) {
+  const DAY = 86400000;
+  let daysPrayed = 0;
+  let prayers = 0;
+  for (let i = 0; i < 7; i += 1) {
+    const n = dayCount(data.days[dayKey(now - i * DAY)]);
+    if (n) daysPrayed += 1;
+    prayers += n;
+  }
+  const since = new Date(dayKey(now - 6 * DAY)).getTime();
+  const answered = Object.values(data.items).filter((i) => live(i) && i.answeredAt >= since).length;
+  return { daysPrayed, prayers, answered, from: now - 6 * DAY, to: now };
 }
