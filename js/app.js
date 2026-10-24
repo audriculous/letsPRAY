@@ -1,0 +1,894 @@
+import * as S from './store.js';
+import * as Sync from './sync.js';
+import { activeCategories, itemsIn, answeredItems, buildSession, streak, allTags, live, dayKey, merge, COLOURS } from './model.js';
+import { suggestTags } from './tags.js';
+import { icon, CATEGORY_ICONS } from './icons.js';
+import { verseFor } from './verses.js';
+
+const $ = (sel, el = document) => el.querySelector(sel);
+const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
+const esc = (s = '') =>
+  String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const catColour = (cat) => `--c: var(--cat-${cat?.color || 'sage'})`;
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+const main = $('#view');
+
+// ---------- Formatting ----------
+
+function ago(ts) {
+  if (!ts) return 'Not prayed yet';
+  const days = Math.round((new Date(dayKey()) - new Date(dayKey(ts))) / 86400000);
+  if (days <= 0) return 'Prayed today';
+  if (days === 1) return 'Prayed yesterday';
+  if (days < 14) return `Prayed ${days} days ago`;
+  if (days < 60) return `Prayed ${Math.round(days / 7)} weeks ago`;
+  return `Prayed ${new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`;
+}
+
+const longDate = (ts) => new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+
+function greeting() {
+  const h = new Date().getHours();
+  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+}
+
+// Keep the user's spelling of an existing tag; capitalise new ones.
+function cleanTag(raw) {
+  const t = raw.replace(/\s+/g, ' ').replace(/^#/, '').trim().slice(0, 32);
+  if (!t) return '';
+  const known = allTags(S.getData()).find((x) => x.tag.toLowerCase() === t.toLowerCase());
+  return known ? known.tag : t[0].toUpperCase() + t.slice(1);
+}
+
+const tagChips = (tags = []) => tags.map((t) => `<span class="chip chip-sm">${esc(t)}</span>`).join('');
+
+// ---------- Shared pieces ----------
+
+function itemRow(item, { showCat = false } = {}) {
+  const cat = S.getData().categories[item.categoryId];
+  const meta = [];
+  if (showCat && cat) meta.push(`<span class="meta-cat" style="${catColour(cat)}">${esc(cat.name)}</span>`);
+  meta.push(tagChips(item.tags));
+  return `<button class="row" data-act="edit-item" data-id="${item.id}">
+    <span class="row-dot" style="${catColour(cat)}"></span>
+    <span class="row-body">
+      <span class="row-title">${esc(item.title)}</span>
+      ${item.notes ? `<span class="row-notes">${esc(item.notes)}</span>` : ''}
+      ${meta.join('') ? `<span class="row-meta">${meta.join('')}</span>` : ''}
+    </span>
+    <span class="row-side">${item.answeredAt ? icon('answered') : esc(ago(item.lastPrayedAt).replace('Prayed ', '').replace('Not prayed yet', 'New'))}</span>
+  </button>`;
+}
+
+function header(title, { kicker = '', back = '', actions = '' } = {}) {
+  return `<header class="page-head">
+    ${back ? `<a class="icon-btn back" href="${back}" aria-label="Back">${icon('back')}</a>` : ''}
+    <div class="page-title">
+      ${kicker ? `<div class="kicker">${kicker}</div>` : ''}
+      <h1>${title}</h1>
+    </div>
+    <div class="page-actions">${actions}</div>
+  </header>`;
+}
+
+const fab = (categoryId = '') =>
+  `<button class="fab" data-act="new-item" data-cat="${categoryId}" aria-label="New prayer point">${icon('plus')}<span>New prayer</span></button>`;
+
+function emptyState(title, body, action = '') {
+  return `<div class="empty"><div class="empty-mark">${icon('hands')}</div><h3>${title}</h3><p>${body}</p>${action}</div>`;
+}
+
+// ---------- Views ----------
+
+const VIEWS = {};
+
+VIEWS.today = () => {
+  const data = S.getData();
+  const cards = buildSession(data);
+  const prayedToday = !!data.days[dayKey()];
+  const days = streak(data);
+  const verse = verseFor();
+  const total = Object.values(data.items).filter((i) => live(i) && !i.answeredAt).length;
+
+  let hero;
+  if (!total) {
+    hero = `<section class="hero">
+      <div class="hero-kicker">Welcome</div>
+      <h2>Start your prayer lists</h2>
+      <p>Add the people, family, church and mission work you want to pray for. Each session brings a few from every list, so everyone comes round in turn.</p>
+      <button class="btn btn-primary" data-act="new-item">${icon('plus')} Add a prayer point</button>
+    </section>`;
+  } else {
+    const mins = Math.max(1, Math.round(cards.length * 0.75));
+    hero = `<section class="hero">
+      <div class="hero-kicker">${prayedToday ? `${icon('check')} Prayed today` : 'Ready when you are'}</div>
+      <h2>${prayedToday ? 'Pray again?' : 'Time to pray'}</h2>
+      <p>${plural(cards.length, 'prayer point')} from ${plural(new Set(cards.map((c) => c.categoryId)).size, 'list')} · about ${mins} min</p>
+      <div class="hero-row">
+        <a class="btn btn-primary btn-lg" href="#/pray" data-act="begin">Begin praying</a>
+        ${days ? `<span class="streak">${icon('sun')} ${plural(days, 'day')} in a row</span>` : ''}
+      </div>
+    </section>`;
+  }
+
+  const groups = activeCategories(data)
+    .map((cat) => ({ cat, items: cards.filter((c) => c.categoryId === cat.id).map((c) => data.items[c.itemId]) }))
+    .filter((g) => g.items.length);
+
+  return `${header(greeting(), { kicker: new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }) })}
+    ${hero}
+    ${
+      groups.length
+        ? `<h3 class="section-title">In today's session</h3>
+      <div class="stack">${groups
+        .map(
+          (g) => `<div class="group">
+          <a class="group-head" href="#/list/${g.cat.id}" style="${catColour(g.cat)}">${icon(g.cat.icon, 'cat-ic')}<span>${esc(g.cat.name)}</span></a>
+          <div class="card list">${g.items.map((i) => itemRow(i)).join('')}</div>
+        </div>`,
+        )
+        .join('')}</div>`
+        : ''
+    }
+    <figure class="verse"><blockquote>${esc(verse.text)}</blockquote><figcaption>${esc(verse.ref)} (NIV)</figcaption></figure>
+    ${fab()}`;
+};
+
+let query = '';
+
+function searchResults() {
+  const data = S.getData();
+  const q = query.trim().toLowerCase();
+  const hits = Object.values(data.items)
+    .filter(
+      (i) =>
+        live(i) &&
+        `${i.title} ${i.notes} ${(i.tags || []).join(' ')} ${i.answerNote || ''}`.toLowerCase().includes(q),
+    )
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return hits.length
+    ? `<div class="card list">${hits.map((i) => itemRow(i, { showCat: true })).join('')}</div>`
+    : `<p class="muted center">Nothing matches “${esc(query)}”.</p>`;
+}
+
+function listsBody() {
+  if (query.trim()) return searchResults();
+  const data = S.getData();
+  const tags = allTags(data);
+  return `<div class="cat-grid">
+      ${activeCategories(data)
+        .map((cat) => {
+          const n = itemsIn(data, cat.id).length;
+          return `<a class="cat-card" href="#/list/${cat.id}" style="${catColour(cat)}">
+            <span class="cat-badge">${icon(cat.icon)}</span>
+            <span class="cat-name">${esc(cat.name)}</span>
+            <span class="cat-count">${n ? plural(n, 'point') : 'Empty'}</span>
+          </a>`;
+        })
+        .join('')}
+      <button class="cat-card cat-new" data-act="new-cat">${icon('plus')}<span class="cat-name">New list</span></button>
+    </div>
+    ${
+      tags.length
+        ? `<h3 class="section-title">Tags</h3>
+      <div class="chips">${tags.map((t) => `<a class="chip" href="#/tag/${encodeURIComponent(t.tag)}">${esc(t.tag)}<span class="chip-n">${t.count}</span></a>`).join('')}</div>`
+        : ''
+    }`;
+}
+
+VIEWS.lists = () => `${header('Lists')}
+  <label class="search">${icon('search')}<input id="search" type="search" placeholder="Search prayer points and tags" value="${esc(query)}" autocomplete="off"></label>
+  <div id="lists-body">${listsBody()}</div>
+  ${fab()}`;
+
+VIEWS.list = (id) => {
+  const data = S.getData();
+  const cat = data.categories[id];
+  if (!live(cat)) return VIEWS.lists();
+  const items = itemsIn(data, id);
+  const answered = answeredItems(data).filter((i) => i.categoryId === id).length;
+  return `${header(`<span class="title-ic" style="${catColour(cat)}">${icon(cat.icon)}</span>${esc(cat.name)}`, {
+    back: '#/lists',
+    kicker: `${plural(items.length, 'prayer point')} · ${cat.perSession} each session`,
+    actions: `<button class="icon-btn" data-act="edit-cat" data-id="${id}" aria-label="Edit list">${icon('edit')}</button>`,
+  })}
+  ${
+    items.length
+      ? `<div class="card list">${items.map((i) => itemRow(i)).join('')}</div>`
+      : emptyState('Nothing here yet', `Add someone or something to pray for in ${esc(cat.name)}.`, `<button class="btn" data-act="new-item" data-cat="${id}">${icon('plus')} Add prayer point</button>`)
+  }
+  ${answered ? `<a class="link-row" href="#/answered">${icon('answered')} ${plural(answered, 'answered prayer')} from this list ${icon('chevron')}</a>` : ''}
+  ${fab(id)}`;
+};
+
+VIEWS.tag = (tag) => {
+  const data = S.getData();
+  const key = tag.toLowerCase();
+  const items = Object.values(data.items)
+    .filter((i) => live(i) && (i.tags || []).some((t) => t.toLowerCase() === key))
+    .sort((a, b) => !!a.answeredAt - !!b.answeredAt || (b.createdAt || 0) - (a.createdAt || 0));
+  return `${header(`${icon('tag', 'title-tag')}${esc(tag)}`, { back: '#/lists', kicker: plural(items.length, 'prayer point') })}
+    ${items.length ? `<div class="card list">${items.map((i) => itemRow(i, { showCat: true })).join('')}</div>` : emptyState('No prayer points', 'Nothing uses this tag any more.')}`;
+};
+
+VIEWS.answered = () => {
+  const data = S.getData();
+  const items = answeredItems(data);
+  return `${header('Answered', { kicker: items.length ? `${plural(items.length, 'answered prayer')} to give thanks for` : 'A record of God’s faithfulness' })}
+  ${
+    items.length
+      ? `<div class="journal">${items
+          .map((i) => {
+            const cat = data.categories[i.categoryId];
+            return `<button class="journal-entry" data-act="edit-item" data-id="${i.id}" style="${catColour(cat)}">
+              <span class="journal-date">${longDate(i.answeredAt)}${cat && live(cat) ? ` · ${esc(cat.name)}` : ''}</span>
+              <span class="journal-title">${esc(i.title)}</span>
+              ${i.answerNote ? `<span class="journal-note">${esc(i.answerNote)}</span>` : ''}
+              <span class="journal-meta">${i.prayedCount ? `Prayed ${plural(i.prayedCount, 'time')} over ${plural(Math.max(1, Math.round((i.answeredAt - i.createdAt) / 86400000)), 'day')}` : `Added ${longDate(i.createdAt)}`}</span>
+            </button>`;
+          })
+          .join('')}</div>`
+      : emptyState('No answered prayers yet', 'When God answers a prayer, open it and mark it as answered. It will be kept here so you can look back and give thanks.')
+  }`;
+};
+
+function syncSection() {
+  const cfg = S.getPrefs().sync;
+  const st = Sync.getStatus();
+  if (cfg) {
+    return `<div class="card pad">
+      <div class="sync-line"><span class="sync-dot is-${st.state}"></span><span>${esc(st.message || 'Connected')}</span>
+      ${st.at && st.state === 'ok' ? `<span class="muted">· ${new Date(st.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>` : ''}</div>
+      <p class="muted small">Syncing through a private GitHub Gist. Use the same token on your Mac and iPhone and they will stay in step.</p>
+      <div class="btn-row">
+        <button class="btn" data-act="sync-now">${icon('sync')} Sync now</button>
+        <button class="btn btn-quiet" data-act="sync-off">Disconnect</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="card pad">
+    <p>Keep your Mac and iPhone in step by syncing through a private GitHub Gist. Your prayer points stay in your own GitHub account.</p>
+    <ol class="steps">
+      <li><a href="https://github.com/settings/tokens/new?scopes=gist&description=Let%27s%20Pray%20sync" target="_blank" rel="noopener">Create a GitHub token</a> with only the <b>gist</b> box ticked.</li>
+      <li>Paste it below on each device.</li>
+    </ol>
+    <form class="token-form" data-form="sync">
+      <input name="token" type="password" placeholder="ghp_…" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+      <button class="btn btn-primary" type="submit">Connect</button>
+    </form>
+    ${st.state === 'error' ? `<p class="error small">${esc(st.message)}</p>` : ''}
+  </div>`;
+}
+
+VIEWS.settings = () => {
+  const data = S.getData();
+  const prefs = S.getPrefs();
+  const cats = activeCategories(data);
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  return `${header('Settings')}
+  <h3 class="section-title">Sync</h3>
+  <div id="sync-section">${syncSection()}</div>
+
+  <h3 class="section-title">Prayer session</h3>
+  <div class="card list">
+    ${cats
+      .map(
+        (cat, i) => `<div class="row row-static" style="${catColour(cat)}">
+        <span class="row-ic">${icon(cat.icon)}</span>
+        <span class="row-body"><span class="row-title">${esc(cat.name)}</span><span class="row-notes">${cat.perSession} each session</span></span>
+        <span class="stepper">
+          <button class="icon-btn sm" data-act="per" data-id="${cat.id}" data-d="-1" aria-label="Fewer">−</button>
+          <button class="icon-btn sm" data-act="per" data-id="${cat.id}" data-d="1" aria-label="More">+</button>
+          <button class="icon-btn sm" data-act="move" data-id="${cat.id}" data-d="-1" ${i === 0 ? 'disabled' : ''} aria-label="Move up">${icon('up')}</button>
+          <button class="icon-btn sm" data-act="move" data-id="${cat.id}" data-d="1" ${i === cats.length - 1 ? 'disabled' : ''} aria-label="Move down">${icon('down')}</button>
+        </span>
+      </div>`,
+      )
+      .join('')}
+  </div>
+
+  <h3 class="section-title">Appearance</h3>
+  <div class="segmented" role="radiogroup">
+    ${['auto', 'light', 'dark'].map((t) => `<button role="radio" aria-checked="${prefs.theme === t}" data-act="theme" data-theme="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
+  </div>
+
+  <h3 class="section-title">Backup</h3>
+  <div class="card pad">
+    <p class="muted small">Download everything as a file, or bring a backup back in. Importing merges with what is already here.</p>
+    <div class="btn-row">
+      <button class="btn" data-act="export">Export backup</button>
+      <label class="btn">Import backup<input type="file" accept="application/json,.json" data-act="import" hidden></label>
+    </div>
+  </div>
+
+  ${
+    standalone
+      ? ''
+      : `<h3 class="section-title">Install</h3>
+  <div class="card pad"><p class="small">${
+    ios
+      ? 'On iPhone: tap the Share button in Safari, then <b>Add to Home Screen</b>.'
+      : 'On Mac: in Safari choose <b>File → Add to Dock</b>, or in Chrome use the install icon in the address bar.'
+  } Let’s Pray then opens like an app and works offline.</p></div>`
+  }
+  <p class="muted small center foot">Let’s Pray · your data lives on this device${prefs.sync ? ' and in your private gist' : ''}.</p>`;
+};
+
+// ---------- Prayer session ----------
+
+let session = null;
+
+function startSession() {
+  session = { cards: buildSession(S.getData()), index: 0, prayed: 0 };
+}
+
+VIEWS.pray = () => {
+  const data = S.getData();
+  if (!session) startSession();
+  // Skip cards whose item was deleted or answered elsewhere.
+  while (session.index < session.cards.length) {
+    const it = data.items[session.cards[session.index].itemId];
+    if (live(it) && !it.answeredAt) break;
+    session.cards.splice(session.index, 1);
+  }
+  const { cards, index } = session;
+  const close = `<button class="icon-btn" data-act="pray-close" aria-label="Close">${icon('x')}</button>`;
+
+  if (!cards.length) {
+    return `<div class="pray"><div class="pray-top">${close}</div>
+      ${emptyState('Nothing to pray through yet', 'Add some prayer points to your lists first.', '<a class="btn" href="#/lists">Go to lists</a>')}</div>`;
+  }
+
+  if (index >= cards.length) {
+    const verse = verseFor(1);
+    return `<div class="pray"><div class="pray-top">${close}</div>
+      <div class="pray-done">
+        <div class="done-mark">${icon('check')}</div>
+        <h2>Amen.</h2>
+        <p>You prayed for ${plural(session.prayed, 'prayer point')}${streak(data) > 1 ? ` · ${streak(data)} days in a row` : ''}.</p>
+        <figure class="verse"><blockquote>${esc(verse.text)}</blockquote><figcaption>${esc(verse.ref)} (NIV)</figcaption></figure>
+        <button class="btn btn-primary btn-lg" data-act="pray-close">Done</button>
+      </div></div>`;
+  }
+
+  const item = data.items[cards[index].itemId];
+  const cat = data.categories[item.categoryId];
+  return `<div class="pray" style="${catColour(cat)}">
+    <div class="pray-top">
+      ${close}
+      <div class="progress" aria-label="${index + 1} of ${cards.length}"><span style="width:${((index + 1) / cards.length) * 100}%"></span></div>
+      <span class="muted small">${index + 1} / ${cards.length}</span>
+    </div>
+    <article class="pray-card" id="pray-card">
+      <div class="pray-cat">${icon(cat?.icon || 'star')}${esc(cat?.name || '')}</div>
+      <h2 class="pray-title">${esc(item.title)}</h2>
+      ${item.notes ? `<p class="pray-notes">${esc(item.notes)}</p>` : ''}
+      ${(item.tags || []).length ? `<div class="chips">${tagChips(item.tags)}</div>` : ''}
+      <div class="pray-meta">${icon('clock')} ${esc(ago(item.lastPrayedAt))}${item.prayedCount ? ` · ${plural(item.prayedCount, 'time')} so far` : ''}</div>
+    </article>
+    <div class="pray-actions">
+      <button class="btn btn-quiet" data-act="pray-back" ${index === 0 ? 'disabled' : ''} aria-label="Previous">${icon('back')}</button>
+      <button class="btn" data-act="pray-answered" data-id="${item.id}">${icon('answered')} Answered</button>
+      <button class="btn btn-quiet" data-act="pray-skip">Skip</button>
+      <button class="btn btn-primary btn-lg pray-amen" data-act="pray-done" data-id="${item.id}">${icon('check')} Prayed</button>
+    </div>
+    <p class="pray-hint muted small">Swipe left when you have prayed · ← → keys on Mac</p>
+  </div>`;
+};
+
+function prayAdvance(prayedId) {
+  session.index += 1;
+  if (prayedId) {
+    session.prayed += 1;
+    S.markPrayed(prayedId); // triggers a render
+  } else render();
+}
+
+function bindSwipe() {
+  const card = $('#pray-card');
+  if (!card) return;
+  let x0 = null;
+  let dx = 0;
+  card.addEventListener('pointerdown', (e) => {
+    x0 = e.clientX;
+    dx = 0;
+    card.setPointerCapture(e.pointerId);
+    card.style.transition = 'none';
+  });
+  card.addEventListener('pointermove', (e) => {
+    if (x0 === null) return;
+    dx = e.clientX - x0;
+    card.style.transform = `translateX(${dx}px) rotate(${dx / 40}deg)`;
+    card.style.opacity = String(1 - Math.min(Math.abs(dx) / 400, 0.5));
+  });
+  const end = () => {
+    if (x0 === null) return;
+    x0 = null;
+    card.style.transition = '';
+    if (dx < -90) {
+      card.classList.add('fly-left');
+      setTimeout(() => prayAdvance($('[data-act="pray-done"]')?.dataset.id), 160);
+    } else if (dx > 90 && session.index > 0) {
+      session.index -= 1;
+      render();
+    } else {
+      card.style.transform = '';
+      card.style.opacity = '';
+    }
+  };
+  card.addEventListener('pointerup', end);
+  card.addEventListener('pointercancel', end);
+}
+
+// ---------- Sheets ----------
+
+function openSheet(html, { onClose } = {}) {
+  const root = document.createElement('div');
+  root.className = 'sheet-root';
+  root.innerHTML = `<div class="sheet-backdrop" data-close></div><div class="sheet" role="dialog" aria-modal="true">${html}</div>`;
+  document.body.appendChild(root);
+  requestAnimationFrame(() => root.classList.add('open'));
+  const close = () => {
+    root.classList.remove('open');
+    document.removeEventListener('keydown', onKey);
+    setTimeout(() => root.remove(), 220);
+    onClose?.();
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') close();
+  };
+  document.addEventListener('keydown', onKey);
+  root.addEventListener('click', (e) => {
+    if (e.target.closest('[data-close]')) close();
+  });
+  return { el: $('.sheet', root), close };
+}
+
+function autosize(ta) {
+  const fit = () => {
+    ta.style.height = 'auto';
+    ta.style.height = `${ta.scrollHeight}px`;
+  };
+  ta.addEventListener('input', fit);
+  requestAnimationFrame(fit);
+}
+
+function openItemSheet({ id, categoryId } = {}) {
+  const data = S.getData();
+  const existing = id ? data.items[id] : null;
+  const cats = activeCategories(data);
+  const draft = existing
+    ? { ...existing, tags: [...(existing.tags || [])] }
+    : { title: '', notes: '', tags: [], categoryId: categoryId && data.categories[categoryId] ? categoryId : cats[0]?.id };
+
+  const answeredBlock = existing?.answeredAt
+    ? `<div class="answered-box">${icon('answered')}<div><b>Answered ${longDate(existing.answeredAt)}</b>${existing.answerNote ? `<p>${esc(existing.answerNote)}</p>` : ''}</div></div>`
+    : '';
+
+  const { el, close } = openSheet(`
+    <div class="sheet-head">
+      <button class="btn btn-quiet" data-close>Cancel</button>
+      <h2>${existing ? 'Prayer point' : 'New prayer point'}</h2>
+      <button class="btn btn-primary" data-save>Save</button>
+    </div>
+    <div class="sheet-body">
+      ${answeredBlock}
+      <textarea class="field field-title" name="title" rows="1" placeholder="Who or what are you praying for?" maxlength="140" autocomplete="off" enterkeyhint="next">${esc(draft.title)}</textarea>
+      <textarea class="field" name="notes" rows="2" placeholder="Details, a verse, what to ask for…">${esc(draft.notes)}</textarea>
+
+      <div class="field-label">List</div>
+      <div class="chips cat-pick">${cats
+        .map((c) => `<button class="chip chip-cat" data-cat="${c.id}" aria-pressed="${c.id === draft.categoryId}" style="${catColour(c)}">${icon(c.icon)}${esc(c.name)}</button>`)
+        .join('')}</div>
+
+      <div class="field-label">Tags</div>
+      <div class="tag-box">
+        <div class="chips" data-tags></div>
+        <input class="tag-input" name="tag" placeholder="Add a tag" autocomplete="off" enterkeyhint="done">
+      </div>
+      <div data-suggest></div>
+
+      ${
+        existing
+          ? `<div class="sheet-foot">
+          ${
+            existing.answeredAt
+              ? `<button class="btn" data-unanswer>${icon('undo')} Move back to praying</button>`
+              : `<button class="btn" data-answer>${icon('answered')} Mark as answered</button>`
+          }
+          <button class="btn btn-danger" data-delete>${icon('trash')} Delete</button>
+        </div>
+        <p class="muted small">${esc(ago(existing.lastPrayedAt))}${existing.prayedCount ? ` · ${plural(existing.prayedCount, 'time')} in total` : ''} · added ${longDate(existing.createdAt)}</p>`
+          : ''
+      }
+    </div>`);
+
+  const title = $('[name=title]', el);
+  const notes = $('[name=notes]', el);
+  const tagInput = $('[name=tag]', el);
+  autosize(title);
+  autosize(notes);
+  if (!existing) setTimeout(() => title.focus(), 250);
+
+  const renderTags = () => {
+    $('[data-tags]', el).innerHTML = draft.tags
+      .map((t, i) => `<button class="chip chip-on" data-remove="${i}" aria-label="Remove ${esc(t)}">${esc(t)}${icon('x')}</button>`)
+      .join('');
+    renderSuggestions();
+  };
+
+  const renderSuggestions = () => {
+    draft.title = title.value;
+    draft.notes = notes.value;
+    const typed = tagInput.value.trim().toLowerCase();
+    const have = new Set(draft.tags.map((t) => t.toLowerCase()));
+    let html = '';
+    if (typed) {
+      const matches = allTags(S.getData())
+        .filter((t) => t.tag.toLowerCase().includes(typed) && !have.has(t.tag.toLowerCase()))
+        .slice(0, 8);
+      html = `<div class="suggest-row"><span class="suggest-label">Press return to add “${esc(cleanTag(tagInput.value))}”</span>
+        ${matches.map((t) => `<button class="chip" data-add="${esc(t.tag)}">${esc(t.tag)}</button>`).join('')}</div>`;
+    } else {
+      const { contextual, frequent } = suggestTags(draft, S.getData());
+      if (contextual.length)
+        html += `<div class="suggest-row"><span class="suggest-label">${icon('sparkle')} Suggested</span>${contextual
+          .map((t) => `<button class="chip chip-suggest" data-add="${esc(t)}">${icon('plus')}${esc(t)}</button>`)
+          .join('')}</div>`;
+      if (frequent.length)
+        html += `<div class="suggest-row"><span class="suggest-label">${icon('clock')} Frequent</span>${frequent
+          .map((t) => `<button class="chip" data-add="${esc(t)}">${icon('plus')}${esc(t)}</button>`)
+          .join('')}</div>`;
+    }
+    $('[data-suggest]', el).innerHTML = html;
+  };
+
+  const addTag = (raw) => {
+    const t = cleanTag(raw);
+    if (t && !draft.tags.some((x) => x.toLowerCase() === t.toLowerCase())) draft.tags.push(t);
+    tagInput.value = '';
+    renderTags();
+  };
+
+  let suggestTimer;
+  const queueSuggest = () => {
+    clearTimeout(suggestTimer);
+    suggestTimer = setTimeout(renderSuggestions, 120);
+  };
+  title.addEventListener('input', queueSuggest);
+  notes.addEventListener('input', queueSuggest);
+  tagInput.addEventListener('input', () => {
+    if (/,/.test(tagInput.value)) {
+      tagInput.value.split(',').slice(0, -1).forEach(addTag);
+      tagInput.value = tagInput.value.split(',').pop();
+    }
+    renderSuggestions();
+  });
+  tagInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (tagInput.value.trim()) addTag(tagInput.value);
+    } else if (e.key === 'Backspace' && !tagInput.value && draft.tags.length) {
+      draft.tags.pop();
+      renderTags();
+    }
+  });
+  title.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      notes.focus();
+    }
+  });
+
+  const save = () => {
+    if (tagInput.value.trim()) addTag(tagInput.value);
+    const t = title.value.trim();
+    if (!t) {
+      title.focus();
+      title.classList.add('shake');
+      setTimeout(() => title.classList.remove('shake'), 400);
+      return;
+    }
+    S.saveItem({ ...draft, title: t, notes: notes.value.trim() });
+    close();
+    toast(existing ? 'Saved' : 'Prayer point added');
+  };
+
+  el.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.cat) {
+      draft.categoryId = b.dataset.cat;
+      $$('.cat-pick .chip', el).forEach((c) => c.setAttribute('aria-pressed', String(c === b)));
+      renderSuggestions();
+    } else if (b.dataset.remove !== undefined) {
+      draft.tags.splice(Number(b.dataset.remove), 1);
+      renderTags();
+    } else if (b.dataset.add) {
+      addTag(b.dataset.add);
+    } else if ('save' in b.dataset) {
+      save();
+    } else if ('delete' in b.dataset) {
+      if (confirm(`Delete “${existing.title}”?`)) {
+        S.deleteItem(existing.id);
+        close();
+        toast('Deleted');
+      }
+    } else if ('answer' in b.dataset) {
+      close();
+      openAnswerSheet(existing.id);
+    } else if ('unanswer' in b.dataset) {
+      S.unmarkAnswered(existing.id);
+      close();
+      toast('Back on your list');
+    }
+  });
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save();
+  });
+
+  renderTags();
+}
+
+function openAnswerSheet(id, { onDone } = {}) {
+  const item = S.getData().items[id];
+  const { el, close } = openSheet(`
+    <div class="sheet-head">
+      <button class="btn btn-quiet" data-close>Cancel</button>
+      <h2>Answered prayer</h2>
+      <button class="btn btn-primary" data-save>Save</button>
+    </div>
+    <div class="sheet-body">
+      <p class="answer-for">${icon('answered')} ${esc(item.title)}</p>
+      <textarea class="field" name="note" rows="3" placeholder="How did God answer? (optional)"></textarea>
+      <p class="muted small">It moves to your Answered journal, so you can look back and give thanks.</p>
+    </div>`);
+  const note = $('[name=note]', el);
+  autosize(note);
+  setTimeout(() => note.focus(), 250);
+  $('[data-save]', el).addEventListener('click', () => {
+    S.markAnswered(id, note.value.trim());
+    close();
+    toast('Praise God!');
+    onDone?.();
+  });
+}
+
+function openCategorySheet(id) {
+  const data = S.getData();
+  const existing = id ? data.categories[id] : null;
+  const draft = existing ? { ...existing } : { name: '', icon: 'star', color: COLOURS[activeCategories(data).length % COLOURS.length], perSession: 2 };
+
+  const { el, close } = openSheet(`
+    <div class="sheet-head">
+      <button class="btn btn-quiet" data-close>Cancel</button>
+      <h2>${existing ? 'Edit list' : 'New list'}</h2>
+      <button class="btn btn-primary" data-save>Save</button>
+    </div>
+    <div class="sheet-body">
+      <input class="field field-title" name="name" placeholder="List name, e.g. Friends, Work, Growth group" value="${esc(draft.name)}" maxlength="40" autocomplete="off">
+      <div class="field-label">Icon</div>
+      <div class="icon-grid">${CATEGORY_ICONS.map((n) => `<button class="icon-pick" data-icon="${n}" aria-pressed="${n === draft.icon}" aria-label="${n}">${icon(n)}</button>`).join('')}</div>
+      <div class="field-label">Colour</div>
+      <div class="swatches">${COLOURS.map((c) => `<button class="swatch" data-colour="${c}" aria-pressed="${c === draft.color}" style="--c: var(--cat-${c})" aria-label="${c}"></button>`).join('')}</div>
+      <div class="field-label">Each session</div>
+      <div class="per-row">
+        <button class="icon-btn" data-per="-1" aria-label="Fewer">−</button>
+        <span data-per-label></span>
+        <button class="icon-btn" data-per="1" aria-label="More">+</button>
+      </div>
+      ${existing ? `<div class="sheet-foot"><button class="btn btn-danger" data-delete>${icon('trash')} Delete list</button></div>` : ''}
+    </div>`);
+
+  const name = $('[name=name]', el);
+  const paint = () => {
+    el.style.cssText = `--c: var(--cat-${draft.color})`;
+    $('[data-per-label]', el).textContent = `Pray for ${draft.perSession} ${draft.perSession === 1 ? 'point' : 'points'}`;
+  };
+  paint();
+  if (!existing) setTimeout(() => name.focus(), 250);
+
+  el.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.icon) {
+      draft.icon = b.dataset.icon;
+      $$('.icon-pick', el).forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    } else if (b.dataset.colour) {
+      draft.color = b.dataset.colour;
+      $$('.swatch', el).forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      paint();
+    } else if (b.dataset.per) {
+      draft.perSession = Math.min(20, Math.max(0, draft.perSession + Number(b.dataset.per)));
+      paint();
+    } else if ('save' in b.dataset) {
+      const n = name.value.trim();
+      if (!n) return name.focus();
+      const newId = S.saveCategory({ ...draft, name: n });
+      close();
+      if (!existing) location.hash = `#/list/${newId}`;
+    } else if ('delete' in b.dataset) {
+      const count = itemsIn(S.getData(), id).length;
+      if (confirm(`Delete “${existing.name}”${count ? ` and its ${plural(count, 'prayer point')}` : ''}?`)) {
+        S.deleteCategory(id);
+        close();
+        location.hash = '#/lists';
+      }
+    }
+  });
+}
+
+// ---------- Toast ----------
+
+let toastTimer;
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+// ---------- Actions ----------
+
+const ACTIONS = {
+  'new-item': (b) => openItemSheet({ categoryId: b.dataset.cat }),
+  'edit-item': (b) => openItemSheet({ id: b.dataset.id }),
+  'new-cat': () => openCategorySheet(),
+  'edit-cat': (b) => openCategorySheet(b.dataset.id),
+  begin: () => startSession(),
+  'pray-done': (b) => prayAdvance(b.dataset.id),
+  'pray-skip': () => prayAdvance(),
+  'pray-back': () => {
+    session.index = Math.max(0, session.index - 1);
+    render();
+  },
+  'pray-answered': (b) => openAnswerSheet(b.dataset.id),
+  'pray-close': () => {
+    session = null;
+    location.hash = '#/today';
+  },
+  per: (b) => {
+    const cat = S.getData().categories[b.dataset.id];
+    S.saveCategory({ ...cat, perSession: Math.min(20, Math.max(0, cat.perSession + Number(b.dataset.d))) });
+  },
+  move: (b) => {
+    const ids = activeCategories(S.getData()).map((c) => c.id);
+    const i = ids.indexOf(b.dataset.id);
+    const j = i + Number(b.dataset.d);
+    if (j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    S.reorderCategories(ids);
+  },
+  theme: (b) => {
+    S.setPrefs({ theme: b.dataset.theme });
+    applyTheme();
+    render();
+  },
+  'sync-now': () => Sync.syncNow(),
+  'sync-off': () => {
+    if (confirm('Stop syncing on this device? Your prayer points stay here.')) Sync.disconnect();
+  },
+  export: () => {
+    const blob = new Blob([JSON.stringify(S.getData(), null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `letspray-backup-${dayKey()}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  },
+};
+
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-act]');
+  if (!b || b.closest('.sheet') || b.tagName === 'INPUT') return;
+  const fn = ACTIONS[b.dataset.act];
+  if (fn) fn(b, e);
+});
+
+document.addEventListener('change', async (e) => {
+  if (e.target.dataset.act !== 'import') return;
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const parsed = JSON.parse(await file.text());
+    S.replaceData(merge(S.getData(), parsed));
+    toast('Backup imported');
+  } catch {
+    toast('That file is not a Let’s Pray backup');
+  }
+  e.target.value = '';
+});
+
+document.addEventListener('submit', async (e) => {
+  const form = e.target.closest('[data-form="sync"]');
+  if (!form) return;
+  e.preventDefault();
+  const btn = $('button', form);
+  btn.disabled = true;
+  btn.textContent = 'Connecting…';
+  try {
+    await Sync.connect(form.token.value);
+    toast('Sync connected');
+  } catch {
+    btn.disabled = false;
+    btn.textContent = 'Connect';
+  }
+  render();
+});
+
+document.addEventListener('input', (e) => {
+  if (e.target.id !== 'search') return;
+  query = e.target.value;
+  $('#lists-body').innerHTML = listsBody();
+});
+
+document.addEventListener('keydown', (e) => {
+  if (document.querySelector('.sheet-root') || /INPUT|TEXTAREA/.test(document.activeElement?.tagName)) return;
+  const r = route();
+  if (r.name === 'pray' && session) {
+    if (e.key === 'ArrowRight' || e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      ($('[data-act="pray-done"]') || $('.pray-done [data-act="pray-close"]'))?.click();
+    } else if (e.key === 'ArrowLeft') $('[data-act="pray-back"]:not([disabled])')?.click();
+    else if (e.key === 'Escape') ACTIONS['pray-close']();
+  } else if (e.key === 'n' && !e.metaKey && !e.ctrlKey) {
+    e.preventDefault();
+    openItemSheet({ categoryId: r.name === 'list' ? r.arg : '' });
+  } else if (e.key === '/' && r.name === 'lists') {
+    e.preventDefault();
+    $('#search')?.focus();
+  }
+});
+
+// ---------- Routing & render ----------
+
+function route() {
+  const [name = 'today', ...rest] = location.hash.replace(/^#\/?/, '').split('/');
+  return { name: name || 'today', arg: decodeURIComponent(rest.join('/')) };
+}
+
+function render() {
+  const r = route();
+  const view = VIEWS[r.name] || VIEWS.today;
+  const scroll = window.scrollY;
+  const same = main.dataset.route === location.hash;
+  document.body.classList.toggle('praying', r.name === 'pray');
+  main.innerHTML = view(r.arg);
+  main.dataset.route = location.hash;
+  if (same) window.scrollTo(0, scroll);
+  const tab = { list: 'lists', tag: 'lists' }[r.name] || r.name;
+  $$('.nav a').forEach((a) => a.toggleAttribute('aria-current', a.dataset.tab === tab));
+  if (r.name === 'pray') bindSwipe();
+}
+
+function applyTheme() {
+  const t = S.getPrefs().theme;
+  if (t === 'auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+}
+
+window.addEventListener('hashchange', () => {
+  if (route().name !== 'pray') session = null;
+  render();
+  window.scrollTo(0, 0);
+});
+
+S.subscribe((kind) => {
+  if (kind !== 'prefs') render();
+});
+Sync.onStatus(() => {
+  const s = $('#sync-section');
+  if (s) s.innerHTML = syncSection();
+  $('.nav-sync')?.setAttribute('data-state', Sync.getStatus().state);
+});
+
+applyTheme();
+render();
+Sync.initSync();
+
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
+}
