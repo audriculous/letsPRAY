@@ -104,20 +104,68 @@ export function answeredItems(data) {
 }
 
 // Prayer Mate style rotation: each category offers its `perSession` least
-// recently prayed points, so everything comes round in turn.
+// recently prayed points, so everything comes round in turn. Points with a
+// date coming up go first and always make it in.
 // scale shortens or lengthens a session (e.g. 0.5 or 2) without changing
 // each list's usual count; a list set to 0 stays at 0.
-export function buildSession(data, scale = 1) {
+export const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+const lastPrayedIn = (data, catId) =>
+  Math.max(0, ...Object.values(data.items).filter((i) => live(i) && i.categoryId === catId).map((i) => i.lastPrayedAt || 0));
+
+// The most recent date (today included) that falls on a given weekday.
+function lastWeekday(today, weekday) {
+  const d = new Date(today);
+  d.setDate(d.getDate() - ((d.getDay() - weekday + 7) % 7));
+  return startOfDay(d.getTime());
+}
+
+// How often a list comes up: every session (the default), or once a week on
+// a chosen day. A weekly list stays due from that day until some of it has
+// been prayed, so a missed Sunday carries over to Monday.
+export function listDue(data, cat, now = Date.now()) {
+  if (cat.frequency !== 'weekly') return true;
+  return lastPrayedIn(data, cat.id) < lastWeekday(startOfDay(now), cat.weekday ?? 0);
+}
+
+// When a weekly list will next come up (today if it is due now).
+export function nextDue(data, cat, now = Date.now()) {
+  const today = startOfDay(now);
+  if (listDue(data, cat, now)) return today;
+  const d = new Date(lastWeekday(today, cat.weekday ?? 0));
+  d.setDate(d.getDate() + 7);
+  return startOfDay(d.getTime());
+}
+
+export function buildSession(data, scale = 1, now = Date.now()) {
   const cards = [];
   for (const cat of activeCategories(data)) {
     const pool = itemsIn(data, cat.id).sort(
       (x, y) => (x.lastPrayedAt || 0) - (y.lastPrayedAt || 0) || (x.createdAt || 0) - (y.createdAt || 0),
     );
     const usual = Math.max(0, cat.perSession ?? 2);
-    const take = usual ? Math.max(1, Math.round(usual * scale)) : 0;
-    pool.slice(0, take).forEach((item) => cards.push({ itemId: item.id, categoryId: cat.id }));
+    const take = usual && listDue(data, cat, now) ? Math.max(1, Math.round(usual * scale)) : 0;
+    const soon = pool.filter((i) => isSoon(i, now)).sort((x, y) => x.eventAt - y.eventAt);
+    const rest = pool.filter((i) => !isSoon(i, now)).slice(0, Math.max(0, take - soon.length));
+    [...soon, ...rest].forEach((item) => cards.push({ itemId: item.id, categoryId: cat.id }));
   }
   return cards;
+}
+
+// Local midnight, so dates line up with the calendar on the device.
+export function startOfDay(ts = Date.now()) {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+// A dated point (surgery on Friday, exams next week) is "soon" from two days
+// before its date until the day after, so it comes up first in a session.
+export function isSoon(item, now = Date.now()) {
+  if (!item.eventAt) return false;
+  const today = startOfDay(now);
+  const diff = Math.round((startOfDay(item.eventAt) - today) / 86400000);
+  return diff >= -1 && diff <= 2;
 }
 
 export function dayKey(ts = Date.now()) {
@@ -164,7 +212,7 @@ export function weekStats(data, now = Date.now()) {
     if (n) daysPrayed += 1;
     prayers += n;
   }
-  const since = new Date(dayKey(now - 6 * DAY)).getTime();
+  const since = startOfDay(now - 6 * DAY);
   const answered = Object.values(data.items).filter((i) => live(i) && i.answeredAt >= since).length;
   return { daysPrayed, prayers, answered, from: now - 6 * DAY, to: now };
 }

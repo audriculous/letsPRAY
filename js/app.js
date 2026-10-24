@@ -1,6 +1,7 @@
 import * as S from './store.js';
 import * as Sync from './sync.js';
-import { activeCategories, itemsIn, answeredItems, buildSession, streak, weekStats, allTags, live, dayKey, merge, COLOURS } from './model.js';
+import { activeCategories, itemsIn, answeredItems, buildSession, streak, weekStats, allTags, live, dayKey, startOfDay, merge, listDue, nextDue, WEEKDAY_NAMES, COLOURS } from './model.js';
+import { parseMany } from './parse.js';
 import { suggestTags } from './tags.js';
 import { icon, CATEGORY_ICONS } from './icons.js';
 import { verseFor } from './verses.js';
@@ -27,6 +28,28 @@ function ago(ts) {
 }
 
 const longDate = (ts) => new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+
+// "Today", "Tomorrow", or "Fri 30 Oct" (long: "Friday 30 October").
+function dateLabel(ts, long = false) {
+  const diff = Math.round((startOfDay(ts) - startOfDay()) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Tomorrow';
+  if (diff === -1) return 'Yesterday';
+  const opts = long ? { weekday: 'long', day: 'numeric', month: 'long' } : { weekday: 'short', day: 'numeric', month: 'short' };
+  if (new Date(ts).getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+  return new Date(ts).toLocaleDateString(undefined, opts);
+}
+
+// "6 each session" or "6 each Sunday".
+const cadence = (cat) => `${cat.perSession} each ${cat.frequency === 'weekly' ? WEEKDAY_NAMES[cat.weekday ?? 0] : 'session'}`;
+
+const dateChip = (ts) => `<span class="chip chip-sm chip-date">${icon('today')}${esc(dateLabel(ts))}</span>`;
+
+// <input type="date"> values are local calendar days.
+const fromDateInput = (v) => {
+  const [y, m, d] = v.split('-').map(Number);
+  return v ? new Date(y, m - 1, d).getTime() : 0;
+};
 
 const shortDate = (ts) => new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 
@@ -64,6 +87,7 @@ function itemRow(item, { showCat = false } = {}) {
   const cat = S.getData().categories[item.categoryId];
   const meta = [];
   if (showCat && cat) meta.push(`<span class="meta-cat" style="${catColour(cat)}">${esc(cat.name)}</span>`);
+  if (item.eventAt && !item.answeredAt) meta.push(dateChip(item.eventAt));
   meta.push(tagChips(item.tags));
   return `<button class="row" data-act="edit-item" data-id="${item.id}">
     <span class="row-dot" style="${catColour(cat)}"></span>
@@ -81,14 +105,11 @@ function header(title, { kicker = '', back = '', actions = '' } = {}) {
     ${back ? `<a class="icon-btn back" href="${back}" aria-label="Back">${icon('back')}</a>` : ''}
     <div class="page-title">
       ${kicker ? `<div class="eyebrow">${kicker}</div>` : ''}
-      <h1 class="display">${title}</h1>
+      <h1 class="display${title.replace(/<[^>]*>/g, '').length > 9 ? ' h1-long' : ''}">${title}</h1>
     </div>
     <div class="page-actions">${actions}</div>
   </header>`;
 }
-
-const fab = (categoryId = '') =>
-  `<button class="fab" data-act="new-item" data-cat="${categoryId}" aria-label="New prayer point">${icon('plus')}<span>New prayer</span></button>`;
 
 function emptyState(title, body, action = '') {
   return `<div class="empty"><div class="empty-mark">${icon('hands')}</div><h3>${title}</h3><p>${body}</p>${action}</div>`;
@@ -111,7 +132,7 @@ VIEWS.today = () => {
     <a class="wordmark" href="#/today"><span class="wm-a">Let’s</span><span class="wm-b">Pray</span><span class="wm-c"></span></a>
     <div class="topbar-actions">
       <a class="round-btn" href="#/lists" data-act="focus-search" aria-label="Search">${icon('search')}</a>
-      <button class="round-btn" data-act="new-item" aria-label="New prayer point">${icon('plus')}</button>
+      <a class="round-btn" href="#/answered" aria-label="Answered">${icon('answered')}</a>
       <a class="round-btn" href="#/settings" aria-label="Settings">${icon('settings')}</a>
     </div>
   </div>`;
@@ -122,7 +143,7 @@ VIEWS.today = () => {
       <div class="eyebrow">Welcome. Let’s get started</div>
       <h2 class="display">Your prayer lists</h2>
       <p class="muted">Add the people, family, church and mission work you want to pray for. Each session brings up a few from every list, so everyone comes round in turn.</p>
-      <button class="btn btn-accent btn-wide" data-act="new-item">${icon('plus')} Add a prayer point</button>
+      <button class="btn btn-accent btn-wide" data-act="quick-add">${icon('plus')} Add a prayer point</button>
     </section>`;
   } else {
     const lists = [...new Set(cards.map((c) => c.categoryId))].map((id) => data.categories[id].name);
@@ -214,7 +235,7 @@ function listsBody() {
 VIEWS.lists = () => `${header('Lists')}
   <label class="search">${icon('search')}<input id="search" type="search" placeholder="Search prayer points and tags" value="${esc(query)}" autocomplete="off"></label>
   <div id="lists-body">${listsBody()}</div>
-  ${fab()}`;
+`;
 
 VIEWS.list = (id) => {
   const data = S.getData();
@@ -224,16 +245,18 @@ VIEWS.list = (id) => {
   const answered = answeredItems(data).filter((i) => i.categoryId === id).length;
   return `${header(`<span class="title-ic" style="${catColour(cat)}">${icon(cat.icon)}</span>${esc(cat.name)}`, {
     back: '#/lists',
-    kicker: `${plural(items.length, 'prayer point')} · ${cat.perSession} each session`,
+    kicker: `${plural(items.length, 'prayer point')} · ${cadence(cat)}${
+      cat.frequency === 'weekly' && items.length ? ` · ${listDue(data, cat) ? 'due today' : `next ${dateLabel(nextDue(data, cat)).toLowerCase()}`}` : ''
+    }`,
     actions: `<button class="icon-btn" data-act="edit-cat" data-id="${id}" aria-label="Edit list">${icon('edit')}</button>`,
   })}
   ${
     items.length
       ? `<div class="card list">${items.map((i) => itemRow(i)).join('')}</div>`
-      : emptyState('Nothing here yet', `Add someone or something to pray for in ${esc(cat.name)}.`, `<button class="btn" data-act="new-item" data-cat="${id}">${icon('plus')} Add prayer point</button>`)
+      : emptyState('Nothing here yet', `Add someone or something to pray for in ${esc(cat.name)}. To add lots at once, tap + and paste a list, one per line.`, `<button class="btn" data-act="quick-add" data-cat="${id}">${icon('plus')} Add prayer point</button>`)
   }
   ${answered ? `<a class="link-row" href="#/answered">${icon('answered')} ${plural(answered, 'answered prayer')} from this list ${icon('chevron')}</a>` : ''}
-  ${fab(id)}`;
+`;
 };
 
 VIEWS.tag = (tag) => {
@@ -316,7 +339,7 @@ VIEWS.settings = () => {
       .map(
         (cat, i) => `<div class="row row-static" style="${catColour(cat)}">
         <span class="row-ic">${icon(cat.icon)}</span>
-        <span class="row-body"><span class="row-title">${esc(cat.name)}</span><span class="row-notes">${cat.perSession} each session</span></span>
+        <span class="row-body"><span class="row-title">${esc(cat.name)}</span><span class="row-notes">${esc(cadence(cat))}</span></span>
         <span class="stepper">
           <button class="icon-btn sm" data-act="per" data-id="${cat.id}" data-d="-1" aria-label="Fewer">−</button>
           <button class="icon-btn sm" data-act="per" data-id="${cat.id}" data-d="1" aria-label="More">+</button>
@@ -405,6 +428,7 @@ VIEWS.pray = () => {
       <h2 class="pray-title">${esc(item.title)}</h2>
       ${item.notes ? `<p class="pray-notes">${esc(item.notes)}</p>` : ''}
       ${(item.tags || []).length ? `<div class="chips">${tagChips(item.tags)}</div>` : ''}
+      ${item.eventAt ? `<div class="pray-meta pray-date">${icon('today')} ${esc(dateLabel(item.eventAt, true))}</div>` : ''}
       <div class="pray-meta">${icon('clock')} ${esc(ago(item.lastPrayedAt))}${item.prayedCount ? ` · ${plural(item.prayedCount, 'time')} so far` : ''}</div>
     </article>
     <div class="pray-actions">
@@ -494,13 +518,13 @@ function autosize(ta) {
   requestAnimationFrame(fit);
 }
 
-function openItemSheet({ id, categoryId } = {}) {
+function openItemSheet({ id, categoryId, prefill } = {}) {
   const data = S.getData();
   const existing = id ? data.items[id] : null;
   const cats = activeCategories(data);
   const draft = existing
     ? { ...existing, tags: [...(existing.tags || [])] }
-    : { title: '', notes: '', tags: [], categoryId: categoryId && data.categories[categoryId] ? categoryId : cats[0]?.id };
+    : { title: '', notes: '', tags: [], eventAt: 0, categoryId: categoryId && data.categories[categoryId] ? categoryId : cats[0]?.id, ...prefill };
 
   const answeredBlock = existing?.answeredAt
     ? `<div class="answered-box">${icon('answered')}<div><b>Answered ${longDate(existing.answeredAt)}</b>${existing.answerNote ? `<p>${esc(existing.answerNote)}</p>` : ''}</div></div>`
@@ -516,6 +540,12 @@ function openItemSheet({ id, categoryId } = {}) {
       ${answeredBlock}
       <textarea class="field field-title" name="title" rows="1" placeholder="Who or what are you praying for?" maxlength="140" autocomplete="off" enterkeyhint="next">${esc(draft.title)}</textarea>
       <textarea class="field" name="notes" rows="2" placeholder="Details, a verse, what to ask for…">${esc(draft.notes)}</textarea>
+
+      <div class="field-label">Date <span class="label-hint">optional · comes up first around then</span></div>
+      <div class="date-row">
+        <input class="field date-input" type="date" name="date" value="${draft.eventAt ? dayKey(draft.eventAt) : ''}">
+        <button class="btn btn-quiet" data-clear-date>Clear</button>
+      </div>
 
       <div class="field-label">List</div>
       <div class="chips cat-pick">${cats
@@ -630,7 +660,7 @@ function openItemSheet({ id, categoryId } = {}) {
       setTimeout(() => title.classList.remove('shake'), 400);
       return;
     }
-    S.saveItem({ ...draft, title: t, notes: notes.value.trim() });
+    S.saveItem({ ...draft, title: t, notes: notes.value.trim(), eventAt: fromDateInput($('[name=date]', el).value) });
     close();
     toast(existing ? 'Saved' : 'Prayer point added');
   };
@@ -647,6 +677,8 @@ function openItemSheet({ id, categoryId } = {}) {
       renderTags();
     } else if (b.dataset.add) {
       addTag(b.dataset.add);
+    } else if ('clearDate' in b.dataset) {
+      $('[name=date]', el).value = '';
     } else if ('save' in b.dataset) {
       save();
     } else if ('delete' in b.dataset) {
@@ -712,7 +744,14 @@ function openCategorySheet(id) {
       <div class="icon-grid">${CATEGORY_ICONS.map((n) => `<button class="icon-pick" data-icon="${n}" aria-pressed="${n === draft.icon}" aria-label="${n}">${icon(n)}</button>`).join('')}</div>
       <div class="field-label">Colour</div>
       <div class="swatches">${COLOURS.map((c) => `<button class="swatch" data-colour="${c}" aria-pressed="${c === draft.color}" style="--c: var(--cat-${c})" aria-label="${c}"></button>`).join('')}</div>
-      <div class="field-label">Each session</div>
+      <div class="field-label">How often</div>
+      <div class="options options-2" role="radiogroup">
+        <button role="radio" data-freq="session">Every session</button>
+        <button role="radio" data-freq="weekly">Once a week</button>
+      </div>
+      <div class="days" data-days>${WEEKDAY_NAMES.map((d, i) => `<button class="chip" data-weekday="${i}" aria-label="${d}">${d.slice(0, 3)}</button>`).join('')}</div>
+      <p class="muted small" data-freq-hint></p>
+      <div class="field-label">Each time</div>
       <div class="per-row">
         <button class="icon-btn" data-per="-1" aria-label="Fewer">−</button>
         <span data-per-label></span>
@@ -725,6 +764,13 @@ function openCategorySheet(id) {
   const paint = () => {
     el.style.cssText = `--c: var(--cat-${draft.color})`;
     $('[data-per-label]', el).textContent = `Pray for ${draft.perSession} ${draft.perSession === 1 ? 'point' : 'points'}`;
+    const weekly = draft.frequency === 'weekly';
+    $$('[data-freq]', el).forEach((x) => x.setAttribute('aria-checked', String(x.dataset.freq === (weekly ? 'weekly' : 'session'))));
+    $('[data-days]', el).hidden = !weekly;
+    $$('[data-weekday]', el).forEach((x) => x.setAttribute('aria-pressed', String(Number(x.dataset.weekday) === (draft.weekday ?? 0))));
+    $('[data-freq-hint]', el).textContent = weekly
+      ? `Comes up on ${WEEKDAY_NAMES[draft.weekday ?? 0]}s, ${draft.perSession} at a time, working through the whole list in turn. If you miss the day, it waits until you pray it.`
+      : `Comes up every time you pray, ${draft.perSession} at a time.`;
   };
   paint();
   if (!existing) setTimeout(() => name.focus(), 250);
@@ -738,6 +784,13 @@ function openCategorySheet(id) {
     } else if (b.dataset.colour) {
       draft.color = b.dataset.colour;
       $$('.swatch', el).forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      paint();
+    } else if (b.dataset.freq) {
+      draft.frequency = b.dataset.freq;
+      if (draft.frequency === 'weekly' && draft.weekday == null) draft.weekday = 0;
+      paint();
+    } else if (b.dataset.weekday) {
+      draft.weekday = Number(b.dataset.weekday);
       paint();
     } else if (b.dataset.per) {
       draft.perSession = Math.min(20, Math.max(0, draft.perSession + Number(b.dataset.per)));
@@ -759,6 +812,157 @@ function openCategorySheet(id) {
   });
 }
 
+// ---------- Quick add ----------
+
+const QUICK_HINTS = [
+  'Try “Mum’s surgery on Friday, for peace #health”',
+  'Try “Growth group starting Romans next week”',
+  'Paste a prayer list: one prayer per line',
+  'Use @family to choose a list and #tag to add a tag',
+];
+
+function openQuickAdd({ categoryId = '' } = {}) {
+  let added = 0;
+  let parsed = [];
+  // Changes made by hand, which further typing must not undo.
+  let pickedList = '';
+  let droppedDate = false;
+  let droppedTags = new Set();
+  let extraTags = [];
+  const reset = () => {
+    pickedList = '';
+    droppedDate = false;
+    droppedTags = new Set();
+    extraTags = [];
+  };
+
+  const { el, close } = openSheet(`
+    <div class="sheet-head">
+      <button class="btn btn-quiet" data-close>Done</button>
+      <h2 data-heading>Quick add</h2>
+      <button class="btn btn-primary" data-add disabled>Add</button>
+    </div>
+    <div class="sheet-body">
+      <textarea class="field field-quick" name="q" rows="2" placeholder="Type a prayer in your own words…" autocomplete="off" enterkeyhint="done"></textarea>
+      <p class="quick-hint">${icon('sparkle')}<span data-hint>${QUICK_HINTS[Math.floor(Math.random() * QUICK_HINTS.length)]}</span></p>
+      <div data-preview></div>
+    </div>`);
+
+  const input = $('[name=q]', el);
+  autosize(input);
+  setTimeout(() => input.focus(), 250);
+
+  const finalise = (p) => {
+    if (parsed.length > 1) return p;
+    const tags = p.tags.filter((t) => !droppedTags.has(t.toLowerCase()));
+    for (const t of extraTags) if (!tags.some((x) => x.toLowerCase() === t.toLowerCase())) tags.push(t);
+    return { ...p, categoryId: pickedList || p.categoryId, tags, date: droppedDate ? 0 : p.date };
+  };
+
+  const render = () => {
+    parsed = parseMany(input.value, S.getData(), { categoryId });
+    $('[data-add]', el).disabled = !parsed.length;
+    $('[data-hint]', el).textContent = parsed.length
+      ? parsed.length > 1
+        ? `${parsed.length} prayer points, one per line`
+        : matchMedia('(hover: hover)').matches ? 'Return to add · Shift+Return for a new line' : 'Check it over, then tap Add'
+      : QUICK_HINTS[added % QUICK_HINTS.length];
+    const data = S.getData();
+    const box = $('[data-preview]', el);
+    if (!parsed.length) return (box.innerHTML = '');
+
+    if (parsed.length > 1) {
+      box.innerHTML = `<div class="card list quick-many">${parsed
+        .map((p) => {
+          const cat = data.categories[p.categoryId];
+          return `<div class="row row-static" style="${catColour(cat)}">
+            <span class="row-dot"></span>
+            <span class="row-body"><span class="row-title">${esc(p.title)}</span>
+            <span class="row-meta"><span class="meta-cat">${esc(cat?.name || '')}</span>${p.date ? dateChip(p.date) : ''}${tagChips(p.tags)}</span></span>
+          </div>`;
+        })
+        .join('')}</div>`;
+      return;
+    }
+
+    const p = finalise(parsed[0]);
+    const cat = data.categories[p.categoryId];
+    const why = pickedList ? '' : p.explicitList ? 'Chosen with @' : categoryId && p.categoryId === categoryId ? 'The list you’re in' : p.why ? `Picked because it ${p.why}` : '';
+    const offered = p.suggestions.filter((t) => !p.tags.some((x) => x.toLowerCase() === t.toLowerCase())).slice(0, 4);
+    box.innerHTML = `<div class="card quick-card" style="${catColour(cat)}">
+      <div class="q-title">${esc(p.title)}</div>
+      ${p.notes ? `<div class="q-notes">${esc(p.notes)}</div>` : ''}
+      <div class="q-label">List${why ? ` <span>${icon('sparkle')}${esc(why)}</span>` : ''}</div>
+      <div class="chips cat-pick">${activeCategories(data)
+        .map((c) => `<button class="chip chip-cat" data-pick="${c.id}" aria-pressed="${c.id === p.categoryId}" style="${catColour(c)}">${icon(c.icon)}${esc(c.name)}</button>`)
+        .join('')}</div>
+      ${
+        p.date
+          ? `<div class="q-label">Date</div><div class="chips"><button class="chip chip-on" data-drop-date aria-label="Remove date">${icon('today')}${esc(dateLabel(p.date, true))}${icon('x')}</button></div>`
+          : ''
+      }
+      <div class="q-label">Tags</div>
+      <div class="chips">
+        ${p.tags.map((t) => `<button class="chip chip-on" data-drop-tag="${esc(t)}" aria-label="Remove ${esc(t)}">${esc(t)}${icon('x')}</button>`).join('')}
+        ${offered.map((t) => `<button class="chip chip-suggest" data-add-tag="${esc(t)}">${icon('plus')}${esc(t)}</button>`).join('')}
+        ${!p.tags.length && !offered.length ? '<span class="muted small">None yet. Type #tag to add one.</span>' : ''}
+      </div>
+      <button class="link-btn" data-more>More details ${icon('chevron')}</button>
+    </div>`;
+  };
+
+  const add = () => {
+    if (!parsed.length) return;
+    const data = S.getData();
+    const items = parsed.map(finalise);
+    for (const p of items) S.saveItem({ title: p.title, notes: p.notes, categoryId: p.categoryId, tags: p.tags, eventAt: p.date || 0 });
+    added += items.length;
+    toast(items.length > 1 ? `Added ${items.length} prayer points` : `Added to ${data.categories[items[0].categoryId]?.name || 'your list'}`);
+    $('[data-heading]', el).textContent = `${added} added`;
+    input.value = '';
+    input.dispatchEvent(new Event('input'));
+    reset();
+    render();
+    input.focus();
+  };
+
+  let timer;
+  input.addEventListener('input', () => {
+    if (!input.value.trim()) reset();
+    clearTimeout(timer);
+    timer = setTimeout(render, 60);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      clearTimeout(timer);
+      render();
+      add();
+    }
+  });
+  el.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if ('add' in b.dataset) return add();
+    if (b.dataset.pick) pickedList = b.dataset.pick;
+    else if ('dropDate' in b.dataset) droppedDate = true;
+    else if (b.dataset.dropTag) {
+      const key = b.dataset.dropTag.toLowerCase();
+      droppedTags.add(key);
+      extraTags = extraTags.filter((t) => t.toLowerCase() !== key);
+    } else if (b.dataset.addTag) {
+      droppedTags.delete(b.dataset.addTag.toLowerCase());
+      extraTags.push(b.dataset.addTag);
+    } else if ('more' in b.dataset) {
+      const p = finalise(parsed[0]);
+      close();
+      openItemSheet({ prefill: { title: p.title, notes: p.notes, categoryId: p.categoryId, tags: p.tags, eventAt: p.date || 0 } });
+      return;
+    } else return;
+    render();
+  });
+}
+
 // ---------- Toast ----------
 
 let toastTimer;
@@ -773,7 +977,7 @@ function toast(msg) {
 // ---------- Actions ----------
 
 const ACTIONS = {
-  'new-item': (b) => openItemSheet({ categoryId: b.dataset.cat }),
+  'quick-add': (b) => openQuickAdd({ categoryId: b.dataset.cat || (route().name === 'list' ? route().arg : '') }),
   'edit-item': (b) => openItemSheet({ id: b.dataset.id }),
   'new-cat': () => openCategorySheet(),
   'edit-cat': (b) => openCategorySheet(b.dataset.id),
@@ -884,7 +1088,7 @@ document.addEventListener('keydown', (e) => {
     else if (e.key === 'Escape') ACTIONS['pray-close']();
   } else if (e.key === 'n' && !e.metaKey && !e.ctrlKey) {
     e.preventDefault();
-    openItemSheet({ categoryId: r.name === 'list' ? r.arg : '' });
+    openQuickAdd({ categoryId: r.name === 'list' ? r.arg : '' });
   } else if (e.key === '/' && r.name === 'lists') {
     e.preventDefault();
     $('#search')?.focus();

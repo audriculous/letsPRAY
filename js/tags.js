@@ -74,6 +74,16 @@ export function names(text) {
   return [...new Set(out)];
 }
 
+// A capitalised first word that is probably a person ("Josh looking for work").
+export function leadingName(title) {
+  const lead = /^([A-Z][a-z\u00e0-\u024f]{2,})(?:[’']s)?\b/.exec((title || '').trim());
+  const word = lead && lead[1].toLowerCase();
+  if (!word || NOT_NAMES.has(word) || STOPWORDS.has(word) || RULES.some((r) => r.re.test(word))) return '';
+  return lead[1];
+}
+
+export const isPersonList = (cat) => !!cat && (['person', 'people', 'home'].includes(cat.icon) || /people|family|friend/i.test(cat.name || ''));
+
 function itemText(item) {
   return `${item.title || ''} ${item.notes || ''}`;
 }
@@ -138,22 +148,23 @@ export function suggestTags(draft, data, { contextual: nCtx = 6, frequent: nFreq
     // 4. People's names. In person-type lists a title usually starts with
     //    one ("Josh looking for work"), so the first word counts there too.
     for (const name of new Set([...names(draft.title), ...names(draft.notes)])) add(name, 1.5);
-    const cat = data.categories[draft.categoryId];
-    if (cat && (['person', 'people', 'home'].includes(cat.icon) || /people|family|friend/i.test(cat.name || ''))) {
-      const lead = /^([A-Z][a-z\u00e0-\u024f]{2,})(?:[’']s)?\b/.exec((draft.title || '').trim());
-      const word = lead && lead[1].toLowerCase();
-      if (word && !NOT_NAMES.has(word) && !STOPWORDS.has(word) && !RULES.some((r) => r.re.test(word))) add(lead[1], 1.5);
+    if (isPersonList(data.categories[draft.categoryId])) {
+      const lead = leadingName(draft.title);
+      if (lead) add(lead, 1.5);
     }
   }
 
   // Small nudge towards tags used in this category, so ties break sensibly.
   for (const key of scores.keys()) scores.set(key, scores.get(key) + Math.min(1, (inCategory.get(key) || 0) * 0.25));
 
-  const contextual = [...scores.entries()]
+  const ranked = [...scores.entries()]
     .filter(([, s]) => s >= 1)
     .sort((a, b) => b[1] - a[1] || display.get(a[0]).localeCompare(display.get(b[0])))
-    .slice(0, nCtx)
-    .map(([key]) => display.get(key));
+    .slice(0, nCtx);
+  const contextual = ranked.map(([key]) => display.get(key));
+  // Clear matches (a theme word in the title, or a tag you already use
+  // named in the text) are confident enough to apply without asking.
+  const strong = ranked.filter(([, sc]) => sc >= 3).map(([key]) => display.get(key));
 
   const taken = new Set([...have, ...contextual.map((t) => t.toLowerCase())]);
   let frequent = [...usage.keys()]
@@ -176,5 +187,5 @@ export function suggestTags(draft, data, { contextual: nCtx = 6, frequent: nFreq
     }
   }
 
-  return { contextual, frequent };
+  return { contextual, frequent, strong };
 }

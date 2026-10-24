@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyData, merge, buildSession, streak, dayKey, fingerprint, allTags, weekStats } from '../js/model.js';
+import { emptyData, merge, buildSession, streak, dayKey, fingerprint, allTags, weekStats, listDue, nextDue } from '../js/model.js';
 
 const item = (id, fields = {}) => ({ id, categoryId: 'cat-people', title: id, tags: [], createdAt: 1, updatedAt: 1, lastPrayedAt: 0, answeredAt: 0, ...fields });
 
@@ -109,4 +109,29 @@ test('week stats total the last seven days', () => {
   assert.equal(s.daysPrayed, 2);
   assert.equal(s.prayers, 4);
   assert.equal(s.answered, 1);
+});
+
+test('weekly lists come up on their day and carry over until prayed', () => {
+  const d = emptyData();
+  d.categories.cong = { id: 'cong', name: 'Congregation', icon: 'people', color: 'teal', order: 9, perSession: 6, frequency: 'weekly', weekday: 0, updatedAt: 1 };
+  for (let i = 0; i < 40; i++) d.items['c' + i] = item('c' + i, { categoryId: 'cong', lastPrayedAt: 0 });
+  const sat = new Date(2026, 9, 24, 9).getTime(); // Saturday
+  const sun = new Date(2026, 9, 25, 9).getTime();
+  const mon = new Date(2026, 9, 26, 9).getTime();
+  const fromCong = (now) => buildSession(d, 1, now).filter((c) => c.categoryId === 'cong');
+  // Never prayed yet: due straight away, six names.
+  assert.equal(fromCong(sat).length, 6);
+  // Prayed on Saturday: not due again until Sunday.
+  for (const c of fromCong(sat)) d.items[c.itemId].lastPrayedAt = sat;
+  assert.equal(listDue(d, d.categories.cong, sat + 3600000), false);
+  assert.equal(dayKey(nextDue(d, d.categories.cong, sat + 3600000)), '2026-10-25');
+  // Sunday: due, and the next six names come round.
+  const sunday = fromCong(sun).map((c) => c.itemId);
+  assert.equal(sunday.length, 6);
+  assert.ok(sunday.every((id) => d.items[id].lastPrayedAt === 0));
+  // Missed Sunday: still due on Monday.
+  assert.equal(listDue(d, d.categories.cong, mon), true);
+  // Prayed on Monday: next is the following Sunday.
+  d.items[sunday[0]].lastPrayedAt = mon;
+  assert.equal(dayKey(nextDue(d, d.categories.cong, mon)), '2026-11-01');
 });

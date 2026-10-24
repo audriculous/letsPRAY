@@ -179,7 +179,7 @@ kbd { font: 12px var(--sans); padding: 1px 6px; border: 1px solid var(--line); b
 .nav .brand { color: var(--ink); }
 .nav-sync { position: absolute; top: 4px; right: 18px; width: 7px; height: 7px; border-radius: 50%; }
 .nav-sync[data-state='error'] { background: var(--danger); }
-body.praying .nav { display: none; }
+body.praying .nav, body.praying .fab { display: none; }
 
 @media (min-width: 860px) {
   .app { display: grid; grid-template-columns: 236px 1fr; min-height: 100vh; }
@@ -225,7 +225,8 @@ body.praying .nav { display: none; }
 
 .page-head { display: flex; align-items: flex-end; gap: 12px; margin: 10px 0 22px; }
 .page-title { flex: 1; min-width: 0; }
-.page-head h1 { font-size: clamp(42px, 12vw, 56px); display: flex; align-items: center; gap: 12px; }
+.page-head h1 { font-size: clamp(42px, 12vw, 56px); display: flex; align-items: center; gap: 12px; overflow-wrap: anywhere; }
+.page-head h1.h1-long { font-size: clamp(30px, 8.6vw, 48px); }
 .page-head .eyebrow { margin-bottom: 6px; font-size: 13px; }
 .page-actions { display: flex; gap: 8px; }
 .page-actions .icon-btn { background: var(--surface-2); width: 46px; height: 46px; color: var(--ink); }
@@ -360,6 +361,12 @@ button.chip:active, a.chip:active { transform: scale(0.96); }
   font-size: 17px; font-weight: 600;
 }
 .options [aria-checked='true'] { background: var(--accent-soft); border-color: var(--accent); }
+.options-2 { grid-template-columns: 1fr 1fr; }
+.days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 10px; }
+.days[hidden] { display: none; }
+.days .chip { justify-content: center; padding: 0; height: 40px; }
+.days .chip[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); font-weight: 700; }
+[data-freq-hint] { margin: 10px 4px 0; }
 
 /* ---------- Today ---------- */
 
@@ -569,6 +576,31 @@ body.praying .view { max-width: 620px; padding-bottom: calc(var(--safe-b) + 24px
 .per-row { display: flex; align-items: center; gap: 12px; }
 .per-row .icon-btn { background: var(--surface-2); color: var(--ink); border-radius: 14px; width: 48px; height: 48px; font: 600 24px var(--display); }
 .per-row span { min-width: 150px; text-align: center; font-weight: 600; }
+
+/* ---------- Dates ---------- */
+
+.chip-date { gap: 4px; color: var(--accent-text); background: var(--accent-soft); }
+.chip-date .ic { width: 13px; height: 13px; }
+.pray-date { color: var(--accent-text); font-weight: 600; margin-top: 0; }
+.label-hint { margin-left: 6px; font-weight: 500; letter-spacing: 0.02em; text-transform: none; color: var(--ink-3); }
+.date-row { display: flex; align-items: center; gap: 8px; }
+.date-input { flex: 1; min-width: 0; height: 52px; padding: 0 16px; -webkit-appearance: none; appearance: none; }
+
+/* ---------- Quick add ---------- */
+
+.field-quick { font-size: 20px; min-height: 92px; }
+.quick-hint { display: flex; align-items: center; gap: 6px; margin: 10px 6px 14px; font-size: 15px; color: var(--ink-2); }
+.quick-hint .ic { width: 16px; height: 16px; color: var(--teal); flex: none; }
+.quick-card { padding: 20px 20px 16px; border-top: 4px solid var(--c); animation: card-in 0.2s ease; }
+.q-title { font: 700 28px/1.1 var(--display); }
+.q-notes { margin-top: 6px; color: var(--ink-2); }
+.q-label { display: flex; align-items: center; gap: 8px; margin: 18px 0 9px; font-size: 13px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--teal); }
+.q-label span { display: inline-flex; align-items: center; gap: 4px; letter-spacing: 0.02em; text-transform: none; font-weight: 500; color: var(--ink-3); }
+.q-label .ic { width: 14px; height: 14px; }
+.link-btn { display: inline-flex; align-items: center; gap: 4px; margin-top: 18px; font-weight: 600; color: var(--accent-text); }
+.link-btn .ic { width: 16px; height: 16px; }
+.quick-many .row { align-items: flex-start; }
+.quick-many .row-dot { background: var(--c); }
 
 /* ---------- Toast ---------- */
 

@@ -4,7 +4,15 @@ A calm, tidy prayer list that runs as a web app on iPhone and Mac and keeps both
 
 ## What it does
 
-- **Lists**: People, Family, Church and Mission to start with. Add, rename, recolour, reorder or delete lists, and choose how many points from each list come up per session.
+- **Lists**: People, Family, Church and Mission to start with. Add, rename, recolour, reorder or delete lists, and choose how many points from each list come up each time.
+- **How often**: each list comes up every session, or once a week on a day you choose. A weekly list (say your congregation, 6 names each Sunday) works through everyone in turn, and if you miss the day it waits until you pray it.
+- **Quick add**: the + in the corner (or press N on a Mac). Type a prayer in your own words and it is sorted for you as you type:
+  - *Title and details*: "Pray for Mum's surgery on Friday, for peace" becomes *Mum's surgery* with the note *Peace*.
+  - *List*: from words like mum, growth group, missionary or a country, a name, a list you mention, or where you filed similar prayers before. It shows why it picked the list, and you can tap another.
+  - *Date*: tomorrow, Friday, next week, in 3 weeks, 31 Oct, 31/10, Christmas, Easter and more. Dated points come first in sessions around that day.
+  - *Tags*: clear themes are added for you; `#tag` adds your own and `@list` picks a list.
+  - Paste several lines (a prayer bulletin, or a congregation list) and each line becomes its own prayer point.
+  - All of this runs on the device: nothing is sent anywhere.
 - **Today**: a greeting (set your name in Settings), an *Up next* card with **Start**, a *Shorter / As planned / Longer* choice for today's session, and a *This week* card showing days prayed, prayers, answered prayers and your streak.
 - **Prayer sessions**: one card at a time. Tap *Prayed* (or swipe left; on Mac use the arrow keys), *Skip*, or *Answered*. The least recently prayed points come first.
 - **Tags** on every prayer point, with two kinds of suggestion while you type:
@@ -59,6 +67,7 @@ npm test        # unit tests for merging, sessions and tag suggestions
 | --- | --- |
 | `js/model.js` | Data shape, merge rules, session rotation, streaks |
 | `js/tags.js` | Tag suggestion engine and theme keywords |
+| `js/parse.js` | Quick add: plain-English parsing of titles, lists, dates and tags |
 | `js/store.js` | Local storage and edits |
 | `js/sync.js` | GitHub Gist sync |
 | `js/app.js` | Views, prayer session, editors |
