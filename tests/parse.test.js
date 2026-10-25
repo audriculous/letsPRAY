@@ -129,3 +129,16 @@ test('a plain comma splits phrases but not a list of names', () => {
   assert.deepEqual([a.title, a.notes], ['The Nguyens in Cambodia', 'Language learning']);
   assert.equal(parse('Mum, Dad and the kids').title, 'Mum, Dad and the kids');
 });
+
+test('pin phrases', () => {
+  const end = (p) => dayKey(p.pinUntil);
+  const a = parse('Mum in hospital, pray every day this week');
+  assert.equal(a.title, 'Mum in hospital');
+  assert.equal(end(a), day(2026, 10, 30));
+  assert.equal(end(parse('Ella daily for 2 weeks')), day(2026, 11, 6));
+  assert.equal(parse('Ella daily for 2 weeks').title, 'Ella');
+  assert.equal(end(parse('Tom #pin')), day(2026, 10, 30));
+  assert.ok(!parse('Tom #pin').tags.includes('Pin'));
+  assert.equal(parse('Persecuted church every day until further notice').pinUntil, 4102444800000);
+  assert.equal(parse('Daily bread for the Smiths').pinUntil, 0);
+});

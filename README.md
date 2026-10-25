@@ -1,6 +1,6 @@
 # Let’s Pray
 
-A calm, tidy prayer list that runs as a web app on iPhone and Mac and keeps both in sync. Inspired by Prayer Mate: your prayer points live in lists, and each session brings up a few from every list so everyone comes round in turn.
+A calm, tidy prayer list that runs as a web app on iPhone and Mac, keeps both in sync, and is ready to publish as an iPhone app (see [Putting Let’s Pray on the App Store](docs/APP_STORE.md)). Inspired by Prayer Mate: your prayer points live in lists, and each session brings up a few from every list so everyone comes round in turn.
 
 ## What it does
 
@@ -18,6 +18,11 @@ A calm, tidy prayer list that runs as a web app on iPhone and Mac and keeps both
 - **Tags** on every prayer point, with two kinds of suggestion while you type:
   - *Suggested*: based on what the prayer is about. Theme words (surgery → Health, exams → Study, missionary → Missionaries and so on), names in the text, existing tags mentioned in the text, and words you have tagged before (it learns from your own tagging).
   - *Frequent*: the tags you use most, weighted towards the list you are in.
+- **Updates**: add an update to a prayer point instead of rewriting it ("Surgery went well, now rehab"). Each one keeps a dated timeline, shown on its card in sessions and in the Answered journal.
+- **Follow-ups**: the day after a dated prayer, Today asks *how did it go?*, with Add update, Answered, Tomorrow and Done.
+- **Pins**: put an urgent prayer into every session for 3 days, a week, 2 weeks or until you unpin it. Quick add understands "pray every day this week", "daily for 2 weeks" and `#pin`.
+- **Reminders**: in the iPhone app, a daily push reminder at your chosen time and days, and a follow-up reminder the morning after a dated prayer. Lock-screen text stays private unless you turn on details. The web version offers a repeating calendar event instead.
+- **Siri and Shortcuts**: a shortcut can open Quick add with dictated text ("Hey Siri, add prayer"). Settings shows the link and the steps.
 - **Undo**: deleting, marking answered, saving an edit or adding prayers shows an *Undo* button for a few seconds (⌘Z on a Mac). In a prayer session, going back a card un-marks a mis-tapped *Prayed*. An undo also syncs, so a restored prayer comes back on your other devices.
 - **No duplicates**: Quick add spots prayers you already have, even written differently ("Sue and Ben Carter" matches "Ben & Sue Carter"). Pasted lists skip repeats unless you choose to add them; a single repeat needs a second press.
 - **Answered journal**: mark a prayer as answered with a note on how God answered, and look back over them later.
@@ -66,7 +71,7 @@ What it does not cover: prayer points stored on each device are protected by tha
 
 ## Backups
 
-*Settings → Backup* exports everything as a JSON file. Importing a backup merges it with what is already on the device.
+*Settings → Backup* saves everything as one file, locked with a passphrase (your sync passphrase or a new one). Importing asks for the passphrase, merges with what is already there, and can be undone. Unlocked backups are still possible if you choose, with a warning.
 
 ## Development
 
@@ -83,6 +88,9 @@ npm test        # unit tests for merging, sessions, tags, parsing and encryption
 | `js/sync.js` | GitHub Gist sync |
 | `js/crypto.js` | End-to-end encryption for sync (PBKDF2 + AES-GCM) |
 | `js/keystore.js` | Keeps the non-extractable sync key in IndexedDB |
+| `js/notify.js` | Reminders: iPhone notifications, and the calendar fallback |
+| `ios/` | The Xcode project for the iPhone app (Capacitor) |
+| `privacy.html` | Privacy policy for the App Store listing |
 | `js/app.js` | Views, prayer session, editors |
 | `sw.js` | Offline cache. Bump `VERSION` when you change files |
 

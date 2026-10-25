@@ -137,20 +137,51 @@ export function nextDue(data, cat, now = Date.now()) {
   return startOfDay(d.getTime());
 }
 
+// Pinned points (a hospital stay, a hard week) open every session until the
+// pin runs out, whatever their list's rhythm, and don't take a list's places.
 export function buildSession(data, scale = 1, now = Date.now()) {
+  const pinned = [];
   const cards = [];
   for (const cat of activeCategories(data)) {
     const pool = itemsIn(data, cat.id).sort(
       (x, y) => (x.lastPrayedAt || 0) - (y.lastPrayedAt || 0) || (x.createdAt || 0) - (y.createdAt || 0),
     );
+    pool.filter((i) => isPinned(i, now)).forEach((item) => pinned.push({ itemId: item.id, categoryId: cat.id }));
+    const unpinned = pool.filter((i) => !isPinned(i, now));
     const usual = Math.max(0, cat.perSession ?? 2);
     const take = usual && listDue(data, cat, now) ? Math.max(1, Math.round(usual * scale)) : 0;
-    const soon = pool.filter((i) => isSoon(i, now)).sort((x, y) => x.eventAt - y.eventAt);
-    const rest = pool.filter((i) => !isSoon(i, now)).slice(0, Math.max(0, take - soon.length));
+    const soon = unpinned.filter((i) => isSoon(i, now)).sort((x, y) => x.eventAt - y.eventAt);
+    const rest = unpinned.filter((i) => !isSoon(i, now)).slice(0, Math.max(0, take - soon.length));
     [...soon, ...rest].forEach((item) => cards.push({ itemId: item.id, categoryId: cat.id }));
   }
-  return cards;
+  return [...pinned, ...cards];
 }
+
+// ---- Pins ----
+
+export const PIN_FOREVER = 4102444800000; // 1 Jan 2100: "until I unpin it"
+export const isPinned = (item, now = Date.now()) => !!item.pinUntil && now <= item.pinUntil;
+// The last moment of the day `days` from now (1 = today only).
+export const pinFor = (days, now = Date.now()) => startOfDay(now) + days * 86400000 - 1;
+
+// ---- Follow-ups ----
+
+// Dated points whose day has passed: time to ask how it went. They stay on
+// Today for two weeks unless followed up, answered or put off until later.
+export function followUps(data, now = Date.now()) {
+  const today = startOfDay(now);
+  return Object.values(data.items)
+    .filter((i) => {
+      if (!live(i) || i.answeredAt || !i.eventAt) return false;
+      const day = startOfDay(i.eventAt);
+      if (day >= today || today - day > 14 * 86400000) return false;
+      if ((i.followedUpAt || 0) >= day) return false;
+      return !(i.followUpAfter && i.followUpAfter > now);
+    })
+    .sort((a, b) => b.eventAt - a.eventAt);
+}
+
+export const latestUpdate = (item) => (item.updates || []).reduce((a, u) => (!a || u.at > a.at ? u : a), null);
 
 // Local midnight, so dates line up with the calendar on the device.
 export function startOfDay(ts = Date.now()) {

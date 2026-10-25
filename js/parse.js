@@ -2,7 +2,7 @@
 // "Pray for Mum's surgery on Friday, for peace #health" becomes
 //   title "Mum's surgery", notes "Peace", list Family, date Friday,
 //   tags Health (and any other clear themes).
-import { activeCategories, allTags, live, startOfDay } from './model.js';
+import { activeCategories, allTags, live, startOfDay, pinFor, PIN_FOREVER } from './model.js';
 import { names, leadingName, tokens, suggestTags, isPersonList } from './tags.js';
 
 // ---------- Dates ----------
@@ -11,7 +11,7 @@ const MONTH = 'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const SHORT_DAYS = { sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6 };
-const NUMBERS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, 'a couple of': 2, 'a few': 3 };
+const NUMBERS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, fourteen: 14, 'a couple of': 2, 'a few': 3 };
 // Small joining words that belong to the date phrase and go with it.
 const LEAD = String.raw`(?:\b(?:on|by|from|until|till|before|after)\s+)?`;
 
@@ -138,6 +138,10 @@ export function parseDate(text, now = Date.now()) {
   return null;
 }
 
+// Pins need "pray" before them or a time span after, so "daily bread" or
+// "everyday struggles" are left alone.
+const PIN = /\b(pray(?:ing)?\s+)?(?:every\s?day|daily)(\s+(?:this week|for (?:the next )?(\d+|an?|one|two|three|four|five|six|seven|ten|fourteen) (days?|weeks?)|(until further notice|for now)))?\b/i;
+
 // ---------- Lists ----------
 
 const FAMILY = /\b(mum|mom|mummy|mother|dad|daddy|parents?|brother|sister|siblings?|wife|husband|son|daughter|kids|children|grandma|grandpa|grandmother|grandfather|grandparents?|nan|nanna|nana|poppy|aunt(?:y|ie)?|uncle|cousins?|niece|nephew|in-laws?|family|step(?:mum|dad|son|daughter)|my baby|our baby)\b/i;
@@ -240,7 +244,7 @@ function tidy(s) {
 
 export function parsePrayer(input, data, { categoryId = '', now = Date.now() } = {}) {
   let text = ` ${input.trim().replace(/^(?:[-*•]|\d+[.)])\s+/, '')} `;
-  const out = { title: '', notes: '', categoryId: '', why: '', explicitList: false, tags: [], suggestions: [], date: 0, dateText: '' };
+  const out = { title: '', notes: '', categoryId: '', why: '', explicitList: false, tags: [], suggestions: [], date: 0, dateText: '', pinUntil: 0 };
 
   // #tags, matched to the spelling you already use.
   const known = allTags(data);
@@ -250,7 +254,8 @@ export function parsePrayer(input, data, { categoryId = '', now = Date.now() } =
     return k ? k.tag : cap(t);
   };
   text = text.replace(/(^|\s)#([\p{L}\d][\p{L}\d_-]*)/gu, (all, sp, word) => {
-    out.tags.push(tagOf(word));
+    if (word.toLowerCase() === 'pin') out.pinUntil = pinFor(7, now);
+    else out.tags.push(tagOf(word));
     return sp;
   });
 
@@ -263,6 +268,15 @@ export function parsePrayer(input, data, { categoryId = '', now = Date.now() } =
     out.categoryId = cat.id;
     out.explicitList = true;
     return sp;
+  });
+
+  // "every day this week", "daily for 2 weeks", "every day until further notice"
+  text = text.replace(PIN, (all, pray, span, n, unit, forever) => {
+    if (!pray && !span) return all;
+    if (forever) out.pinUntil = PIN_FOREVER;
+    else if (n) out.pinUntil = pinFor((Number(n) || NUMBERS[n.toLowerCase()] || 1) * (/week/i.test(unit) ? 7 : 1), now);
+    else out.pinUntil = pinFor(7, now);
+    return ' ';
   });
 
   const found = parseDate(text, now);

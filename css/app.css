@@ -649,3 +649,62 @@ body.praying .view { max-width: 620px; padding-bottom: calc(var(--safe-b) + 24px
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Follow-ups, updates and pins ---------- */
+
+.btn-sm { height: 36px; padding: 0 12px; font-size: 15px; border-radius: 12px; }
+.btn-sm .ic { width: 16px; height: 16px; }
+.follow .panel-head > .ic { color: var(--accent-text); }
+.follow-row { display: grid; gap: 10px; padding: 14px 22px; border-top: 1px solid var(--line); }
+.follow-row p b { color: var(--c); }
+.follow-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.follow { padding-bottom: 8px; }
+
+.chip-pin { gap: 4px; color: var(--teal); background: color-mix(in srgb, var(--teal) 14%, transparent); }
+.chip-pin .ic { width: 13px; height: 13px; }
+.pin-pick .chip[aria-pressed='true'] { background: color-mix(in srgb, var(--teal) 16%, var(--surface)); border-color: var(--teal); font-weight: 600; }
+.pin-pick .chip .ic { width: 14px; height: 14px; color: var(--teal); }
+
+.row-update { display: flex; align-items: center; gap: 6px; }
+.row-update .ic { width: 14px; height: 14px; flex: none; color: var(--accent-text); }
+.pray-update { display: grid; gap: 4px; padding: 12px 14px; border-radius: 16px; background: var(--accent-soft); font-size: 17px; }
+.pray-update span { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-text); }
+.pray-update .ic { width: 15px; height: 15px; }
+
+.updates { display: grid; gap: 8px; }
+.update { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 10px; padding: 10px 6px 10px 14px; border-radius: 14px; background: var(--surface); }
+.update-date { font: 600 15px/1.5 var(--display); color: var(--accent-text); white-space: nowrap; }
+.update-text { min-width: 0; overflow-wrap: anywhere; }
+.update .icon-btn.sm { background: transparent; color: var(--ink-3); }
+.update-add { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; }
+.update-add .field { flex: 1; min-width: 0; }
+.update-add .btn { height: 50px; }
+
+.journal-updates { display: grid; gap: 4px; margin-top: 6px; padding-left: 12px; border-left: 2px solid var(--line); font-size: 15px; color: var(--ink-2); }
+.journal-updates i { font-style: normal; font-weight: 600; color: var(--ink-3); margin-right: 8px; }
+
+/* ---------- Settings: reminders, shortcuts, backups ---------- */
+
+.reminders { display: grid; gap: 14px; }
+.reminders > p { margin: 0; }
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.switch-row span { display: grid; gap: 2px; }
+.switch-row small { font-size: 14px; color: var(--ink-2); }
+.switch { appearance: none; -webkit-appearance: none; flex: none; width: 52px; height: 32px; border-radius: 16px; background: var(--surface-2); border: 1.5px solid var(--line); position: relative; cursor: pointer; transition: background 0.15s; }
+.switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 25px; height: 25px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2); transition: transform 0.15s; }
+.switch:checked { background: var(--accent); border-color: var(--accent); }
+.switch:checked::after { transform: translateX(20px); }
+.time-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-weight: 600; }
+.time-row input { height: 44px; padding: 0 12px; border: 1.5px solid var(--line); border-radius: 14px; background: var(--surface-2); font: 600 18px var(--sans); color: var(--ink); }
+.rem-detail { display: grid; gap: 12px; }
+.rem-detail[hidden] { display: none; }
+.reminders .days { margin-top: 0; }
+
+.copy-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+.copy-row code { flex: 1; min-width: 0; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); font: 13px/1.4 ui-monospace, 'SF Mono', Menlo, monospace; overflow-wrap: anywhere; user-select: all; -webkit-user-select: all; }
+
+.radio-row { display: flex; align-items: center; gap: 10px; font-size: 16px; }
+.radio-row input { width: 20px; height: 20px; accent-color: var(--accent); }
+[data-new-pass][hidden] { display: none; }
+.small-link { font-size: 14px; margin-top: 2px; justify-self: start; color: var(--ink-2); }
+#backup-section .dup-note { margin: 14px 0 0; }

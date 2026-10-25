@@ -9,7 +9,9 @@ const maskable = square.replace(/(<rect width="512" height="512" rx="0"[^>]*\/>)
 (async () => {
   const b = await chromium.launch();
   const p = await b.newPage();
-  const shots = [['icon-192.png', svg, 192], ['icon-512.png', svg, 512], ['apple-touch-icon.png', square, 180], ['icon-maskable-512.png', maskable, 512]];
+  // App Store icon: a full square, which iOS rounds itself. scripts/ios-assets.py
+  // removes its alpha channel and builds the launch screen from it.
+  const shots = [['icon-192.png', svg, 192], ['icon-512.png', svg, 512], ['apple-touch-icon.png', square, 180], ['icon-maskable-512.png', maskable, 512], ['app-store-1024.png', square, 1024]];
   for (const [name, src, size] of shots) {
     await p.setViewportSize({ width: size, height: size });
     await p.setContent(`<html><body style="margin:0;background:transparent">${src.replace('<svg ', `<svg width="${size}" height="${size}" `)}</body></html>`);

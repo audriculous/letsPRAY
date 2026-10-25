@@ -59,3 +59,22 @@ test('undo an edit puts the old wording back', () => {
   S.undo();
   assert.equal(S.getData().items[id].title, 'First wording');
 });
+
+test('updates are added, count as following up, and can be undone', () => {
+  const id = S.saveItem({ title: 'Surgery', categoryId: 'cat-family', eventAt: Date.now() - 2 * 86400000 });
+  S.addUpdate(id, 'Went well, now rehab');
+  const it = S.getData().items[id];
+  assert.equal(it.updates.length, 1);
+  assert.equal(it.updates[0].text, 'Went well, now rehab');
+  assert.ok(it.followedUpAt > 0);
+  S.undo();
+  assert.equal((S.getData().items[id].updates || []).length, 0);
+});
+
+test('pin and unpin', () => {
+  const id = S.saveItem({ title: 'Hospital', categoryId: 'cat-family' });
+  S.setPin(id, Date.now() + 86400000);
+  assert.ok(S.getData().items[id].pinUntil > Date.now());
+  S.setPin(id, 0);
+  assert.equal(S.getData().items[id].pinUntil, 0);
+});

@@ -1,0 +1,14 @@
+{
+  "appId": "com.letspray.app",
+  "appName": "Let’s Pray",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#efede8"
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "iconColor": "#c87b8d"
+    }
+  }
+}

@@ -1,8 +1,10 @@
 import * as S from './store.js';
 import * as Sync from './sync.js';
-import { activeCategories, itemsIn, answeredItems, buildSession, streak, weekStats, allTags, live, dayKey, startOfDay, merge, listDue, nextDue, findDuplicate, titleKey, WEEKDAY_NAMES, COLOURS } from './model.js';
+import { activeCategories, itemsIn, answeredItems, buildSession, streak, weekStats, allTags, live, dayKey, startOfDay, merge, listDue, nextDue, findDuplicate, titleKey, isPinned, pinFor, PIN_FOREVER, followUps, latestUpdate, WEEKDAY_NAMES, COLOURS } from './model.js';
 import { parseMany } from './parse.js';
-import { MIN_PASSPHRASE, normalisePassphrase } from './crypto.js';
+import { MIN_PASSPHRASE, normalisePassphrase, ITERATIONS, newSalt, deriveKey, seal, unseal, envelopeKey, isEnvelope } from './crypto.js';
+import { loadKey } from './keystore.js';
+import * as Notify from './notify.js';
 import { suggestTags } from './tags.js';
 import { icon, CATEGORY_ICONS } from './icons.js';
 import { verseFor } from './verses.js';
@@ -43,6 +45,17 @@ function dateLabel(ts, long = false) {
 
 // "6 each session" or "6 each Sunday".
 const cadence = (cat) => `${cat.perSession} each ${cat.frequency === 'weekly' ? WEEKDAY_NAMES[cat.weekday ?? 0] : 'session'}`;
+
+const pinLabel = (until) => (until >= PIN_FOREVER ? 'Pinned' : `Pinned to ${dateLabel(until).replace(/^(Today|Tomorrow)$/, (w) => w.toLowerCase())}`);
+const pinChip = (item) => (isPinned(item) ? `<span class="chip chip-sm chip-pin">${icon('pin')}${esc(pinLabel(item.pinUntil))}</span>` : '');
+
+// "yesterday", "on Friday", "on 12 Oct"
+function whenPast(ts) {
+  const days = Math.round((startOfDay() - startOfDay(ts)) / 86400000);
+  if (days === 1) return 'yesterday';
+  if (days < 7) return `on ${new Date(ts).toLocaleDateString(undefined, { weekday: 'long' })}`;
+  return `on ${new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
+}
 
 const dateChip = (ts) => `<span class="chip chip-sm chip-date">${icon('today')}${esc(dateLabel(ts))}</span>`;
 
@@ -88,13 +101,15 @@ function itemRow(item, { showCat = false } = {}) {
   const cat = S.getData().categories[item.categoryId];
   const meta = [];
   if (showCat && cat) meta.push(`<span class="meta-cat" style="${catColour(cat)}">${esc(cat.name)}</span>`);
+  if (!item.answeredAt) meta.push(pinChip(item));
   if (item.eventAt && !item.answeredAt) meta.push(dateChip(item.eventAt));
   meta.push(tagChips(item.tags));
+  const update = latestUpdate(item);
   return `<button class="row" data-act="edit-item" data-id="${item.id}">
     <span class="row-dot" style="${catColour(cat)}"></span>
     <span class="row-body">
       <span class="row-title">${esc(item.title)}</span>
-      ${item.notes ? `<span class="row-notes">${esc(item.notes)}</span>` : ''}
+      ${update ? `<span class="row-notes row-update">${icon('chat')}${esc(update.text)}</span>` : item.notes ? `<span class="row-notes">${esc(item.notes)}</span>` : ''}
       ${meta.join('') ? `<span class="row-meta">${meta.join('')}</span>` : ''}
     </span>
     <span class="row-side">${item.answeredAt ? icon('answered') : esc(ago(item.lastPrayedAt).replace('Prayed ', '').replace('Not prayed yet', 'New'))}</span>
@@ -177,9 +192,33 @@ VIEWS.today = () => {
     .map((cat) => ({ cat, items: cards.filter((c) => c.categoryId === cat.id).map((c) => data.items[c.itemId]) }))
     .filter((g) => g.items.length);
 
+  // Dated prayers whose day has passed: a nudge to ask how it went.
+  const ups = followUps(data);
+  const followCard = ups.length
+    ? `<section class="card panel follow">
+      <div class="panel-head">${icon('chat')}<h3>Follow up</h3><span class="panel-meta">${ups.length > 1 ? ups.length : ''}</span></div>
+      ${ups
+        .slice(0, 5)
+        .map((i) => {
+          const cat = data.categories[i.categoryId];
+          return `<div class="follow-row" style="${catColour(cat)}">
+            <p><b>${esc(i.title)}</b> was ${esc(whenPast(i.eventAt))}. Ask how it went?</p>
+            <div class="follow-actions">
+              <button class="btn btn-sm" data-act="fu-update" data-id="${i.id}">${icon('chat')} Add update</button>
+              <button class="btn btn-sm" data-act="fu-answered" data-id="${i.id}">${icon('answered')} Answered</button>
+              <button class="btn btn-sm btn-quiet" data-act="fu-later" data-id="${i.id}">Tomorrow</button>
+              <button class="btn btn-sm btn-quiet" data-act="fu-done" data-id="${i.id}">Done</button>
+            </div>
+          </div>`;
+        })
+        .join('')}
+    </section>`
+    : '';
+
   return `${topbar}
     <h1 class="greeting display">${greeting()}</h1>
     ${hero}
+    ${followCard}
     ${total ? weekCard : ''}
     ${groups
       .map(
@@ -283,6 +322,14 @@ VIEWS.answered = () => {
               <span class="journal-date">${longDate(i.answeredAt)}${cat && live(cat) ? ` · ${esc(cat.name)}` : ''}</span>
               <span class="journal-title">${esc(i.title)}</span>
               ${i.answerNote ? `<span class="journal-note">${esc(i.answerNote)}</span>` : ''}
+              ${
+                (i.updates || []).length
+                  ? `<span class="journal-updates">${[...i.updates]
+                      .sort((a, b) => a.at - b.at)
+                      .map((u) => `<span><i>${esc(new Date(u.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }))}</i>${esc(u.text)}</span>`)
+                      .join('')}</span>`
+                  : ''
+              }
               <span class="journal-meta">${i.prayedCount ? `Prayed ${plural(i.prayedCount, 'time')} over ${plural(Math.max(1, Math.round((i.answeredAt - i.createdAt) / 86400000)), 'day')}` : `Added ${longDate(i.createdAt)}`}</span>
             </button>`;
           })
@@ -383,6 +430,166 @@ function refreshSync() {
   $$('[data-show-pass]', box).forEach((c) => (c.checked = shown));
 }
 
+// ---------- Reminders ----------
+
+const reminderPrefs = () => ({ ...Notify.DEFAULT_REMINDER, ...S.getPrefs().reminder });
+let notifyState = 'unknown';
+const pad2 = (n) => String(n).padStart(2, '0');
+
+function remindersSection() {
+  const r = reminderPrefs();
+  const time = `<label class="time-row"><span>Time</span><input id="rem-time" type="time" data-rem="time" value="${pad2(r.hour)}:${pad2(r.minute)}"></label>`;
+  const days = `<div class="days">${WEEKDAY_NAMES.map((d, i) => `<button class="chip" data-act="rem-day" data-day="${i}" aria-pressed="${r.days.includes(i)}" aria-label="${d}">${d.slice(0, 3)}</button>`).join('')}</div>`;
+  const toggle = (key, title, hint) => `<label class="switch-row"><span><b>${title}</b><small>${hint}</small></span><input type="checkbox" class="switch" id="rem-${key}" data-rem="${key}" ${r[key] ? 'checked' : ''}></label>`;
+  if (Notify.canNotify()) {
+    return `<div class="card pad reminders">
+      ${toggle('on', 'Daily reminder', 'A notification at the same time each day')}
+      <div class="rem-detail" ${r.on ? '' : 'hidden'}>${time}${days}</div>
+      ${toggle('followUps', 'Follow-up reminders', 'The morning after a dated prayer, a nudge to ask how it went')}
+      ${toggle('details', 'Show details on the lock screen', 'When off, reminders only say how many prayer points there are, so names and needs stay private')}
+      ${notifyState === 'denied' ? '<p class="error small">Notifications are turned off for Let’s Pray. Turn them on in iPhone Settings → Let’s Pray → Notifications.</p>' : ''}
+    </div>`;
+  }
+  return `<div class="card pad reminders">
+    <p>Daily push reminders arrive once Let’s Pray is installed from the App Store. Until then, add a repeating reminder to your calendar.</p>
+    ${time}${days}
+    <div class="btn-row"><button class="btn btn-primary" data-act="rem-calendar">${icon('bell')} Add to calendar</button></div>
+    <p class="muted small">Follow-ups for dated prayers appear on your Today screen.</p>
+  </div>`;
+}
+
+const refreshReminders = () => {
+  const box = $('#reminders-section');
+  if (box) box.innerHTML = remindersSection();
+};
+
+let rescheduleTimer;
+function scheduleReminders() {
+  if (!Notify.canNotify()) return;
+  clearTimeout(rescheduleTimer);
+  rescheduleTimer = setTimeout(() => Notify.reschedule(S.getData(), reminderPrefs()).catch(() => {}), 1200);
+}
+
+async function updateReminder(patch) {
+  S.setPrefs({ reminder: { ...reminderPrefs(), ...patch } });
+  if (Notify.canNotify() && (patch.on || patch.followUps)) notifyState = await Notify.permission(true);
+  scheduleReminders();
+  refreshReminders();
+}
+
+// ---------- Siri & Shortcuts ----------
+
+const shortcutLink = (save = false) =>
+  Notify.isNativeApp() ? `letspray://add?${save ? 'save=1&' : ''}text=` : `${location.origin}${location.pathname}#/add?${save ? 'save=1&' : ''}text=`;
+
+function shortcutSection() {
+  return `<div class="card pad">
+    <p>Add prayers by voice. Say <b>“Hey Siri, add prayer”</b>, speak it, and Quick add sorts out the list, date and tags.</p>
+    <ol class="steps">
+      <li>Open the <b>Shortcuts</b> app, tap <b>+</b>, and name the shortcut <b>Add prayer</b>.</li>
+      <li>Add the actions <b>Dictate Text</b>, then <b>URL Encode</b>.</li>
+      <li>Add <b>URL</b>, paste the link below, then insert <i>URL Encoded Text</i> at the end.</li>
+      <li>Add <b>Open URLs</b>.</li>
+    </ol>
+    <div class="copy-row"><code>${esc(shortcutLink())}</code><button class="btn btn-sm" data-act="copy-link" data-link="${esc(shortcutLink())}">${icon('copy')} Copy</button></div>
+    <p class="muted small">To add straight away without checking first, use this link instead:</p>
+    <div class="copy-row"><code>${esc(shortcutLink(true))}</code><button class="btn btn-sm" data-act="copy-link" data-link="${esc(shortcutLink(true))}">${icon('copy')} Copy</button></div>
+    ${
+      Notify.isNativeApp()
+        ? ''
+        : '<p class="muted small">On iPhone a web link opens Safari rather than the Home Screen app, so adding by voice works best once Let’s Pray is in the App Store. On a Mac it works now.</p>'
+    }
+  </div>`;
+}
+
+// Opened from a Siri shortcut or link: #/add?text=…[&save=1]
+function handleAddLink(text, save) {
+  if (save && text.trim()) {
+    const data = S.getData();
+    const list = parseMany(text, data).filter((p) => !findDuplicate(data, p.title));
+    if (!list.length) return toast('Already on your lists');
+    S.batch(list.length > 1 ? `Added ${list.length}` : 'Added', () => {
+      for (const p of list) S.saveItem({ title: p.title, notes: p.notes, categoryId: p.categoryId, tags: p.tags, eventAt: p.date || 0, pinUntil: p.pinUntil || 0 });
+    });
+    return toast(list.length > 1 ? `Added ${list.length} prayer points` : `Added to ${data.categories[list[0].categoryId]?.name || 'your list'}`, { undo: true });
+  }
+  openQuickAdd({ text });
+}
+
+// ---------- Backups ----------
+
+let backupPanel = ''; // 'export', 'plain' or 'import'
+let pendingImport = null; // a locked backup waiting for its passphrase
+
+function backupSection() {
+  const synced = !!S.getPrefs().sync;
+  let panel = '';
+  if (backupPanel === 'export') {
+    panel = `<form class="sync-form" data-form="backup-export">
+      ${
+        synced
+          ? `<label class="radio-row"><input type="radio" name="how" value="sync" checked> Lock it with my sync passphrase</label>
+             <label class="radio-row"><input type="radio" name="how" value="new"> Choose a different passphrase</label>`
+          : ''
+      }
+      <div class="sync-form" data-new-pass ${synced ? 'hidden' : ''}>${passFields(true, 'Backup passphrase')}</div>
+      <p class="error small" data-form-error></p>
+      <div class="btn-row"><button class="btn btn-primary" type="submit">${icon('lock')} Export locked backup</button><button class="btn btn-quiet" type="button" data-act="backup-cancel">Cancel</button></div>
+      <button class="link-btn small-link" type="button" data-act="backup-plain">Export without a passphrase</button>
+    </form>`;
+  } else if (backupPanel === 'plain') {
+    panel = `<div class="dup-note">${icon('lock')}<span>Anyone who gets an unlocked file can read every prayer in it.</span>
+      <button class="btn btn-sm" data-act="backup-plain-go">Export unlocked</button><button class="btn btn-sm btn-quiet" data-act="backup-cancel">Cancel</button></div>`;
+  } else if (backupPanel === 'import') {
+    panel = `<form class="sync-form" data-form="backup-import">
+      <p class="small">This backup is locked. Enter the passphrase it was exported with.</p>
+      ${passFields(false, 'Backup passphrase')}
+      <p class="error small" data-form-error></p>
+      <div class="btn-row"><button class="btn btn-primary" type="submit">${icon('lock')} Unlock and import</button><button class="btn btn-quiet" type="button" data-act="backup-cancel">Cancel</button></div>
+    </form>`;
+  }
+  return `<div class="card pad">
+    <p class="muted small">Save everything as one file to keep in iCloud Drive or email to yourself. Backups are locked with a passphrase. Importing merges with what is already here, and can be undone.</p>
+    <div class="btn-row">
+      <button class="btn" data-act="backup-export">${icon('lock')} Export backup</button>
+      <label class="btn">Import backup<input type="file" accept="application/json,.json" data-act="import" hidden></label>
+    </div>
+    ${panel}
+  </div>`;
+}
+
+const refreshBackup = () => {
+  const box = $('#backup-section');
+  if (box) box.innerHTML = backupSection();
+};
+
+// Hands a file to the person: the share sheet in the App Store app (so it can
+// go to Files or Mail), otherwise a normal download.
+async function saveFile(name, text, type = 'application/json') {
+  const cap = window.Capacitor?.Plugins;
+  if (Notify.isNativeApp() && cap?.Filesystem && cap?.Share) {
+    const { uri } = await cap.Filesystem.writeFile({ path: name, data: text, directory: 'CACHE', encoding: 'utf8' });
+    await cap.Share.share({ title: name, files: [uri] });
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function exportBackup(record) {
+  const envelope = record ? { ...(await seal(S.getData(), record)), backup: true, exportedAt: Date.now() } : S.getData();
+  await saveFile(`letspray-backup-${dayKey()}.json`, JSON.stringify(envelope, null, record ? 0 : 2));
+  backupPanel = '';
+  refreshBackup();
+  toast(record ? 'Locked backup saved' : 'Backup saved');
+}
+
 VIEWS.settings = () => {
   const data = S.getData();
   const prefs = S.getPrefs();
@@ -397,6 +604,12 @@ VIEWS.settings = () => {
 
   <h3 class="section-title">Sync</h3>
   <div id="sync-section">${syncSection()}</div>
+
+  <h3 class="section-title">Reminders</h3>
+  <div id="reminders-section">${remindersSection()}</div>
+
+  <h3 class="section-title">Siri & Shortcuts</h3>
+  ${shortcutSection()}
 
   <h3 class="section-title">Prayer session</h3>
   <div class="card list">
@@ -422,16 +635,10 @@ VIEWS.settings = () => {
   </div>
 
   <h3 class="section-title">Backup</h3>
-  <div class="card pad">
-    <p class="muted small">Download everything as a file, or bring a backup back in. Importing merges with what is already here. Backup files are not encrypted, so keep them somewhere safe.</p>
-    <div class="btn-row">
-      <button class="btn" data-act="export">Export backup</button>
-      <label class="btn">Import backup<input type="file" accept="application/json,.json" data-act="import" hidden></label>
-    </div>
-  </div>
+  <div id="backup-section">${backupSection()}</div>
 
   ${
-    standalone
+    standalone || Notify.isNativeApp()
       ? ''
       : `<h3 class="section-title">Install</h3>
   <div class="card pad"><p class="small">${
@@ -492,7 +699,11 @@ VIEWS.pray = () => {
       <div class="eyebrow pray-cat">${icon(cat?.icon || 'star')}${esc(cat?.name || '')}</div>
       <h2 class="pray-title">${esc(item.title)}</h2>
       ${item.notes ? `<p class="pray-notes">${esc(item.notes)}</p>` : ''}
-      ${(item.tags || []).length ? `<div class="chips">${tagChips(item.tags)}</div>` : ''}
+      ${(() => {
+        const u = latestUpdate(item);
+        return u ? `<div class="pray-update"><span>${icon('chat')} Latest · ${esc(ago(u.at).replace('Prayed ', ''))}</span>${esc(u.text)}</div>` : '';
+      })()}
+      ${(item.tags || []).length || isPinned(item) ? `<div class="chips">${pinChip(item)}${tagChips(item.tags)}</div>` : ''}
       ${item.eventAt ? `<div class="pray-meta pray-date">${icon('today')} ${esc(dateLabel(item.eventAt, true))}</div>` : ''}
       <div class="pray-meta">${icon('clock')} ${esc(ago(item.lastPrayedAt))}${item.prayedCount ? ` · ${plural(item.prayedCount, 'time')} so far` : ''}</div>
     </article>
@@ -602,7 +813,8 @@ function openItemSheet({ id, categoryId, prefill } = {}) {
   const cats = activeCategories(data);
   const draft = existing
     ? { ...existing, tags: [...(existing.tags || [])] }
-    : { title: '', notes: '', tags: [], eventAt: 0, categoryId: categoryId && data.categories[categoryId] ? categoryId : cats[0]?.id, ...prefill };
+    : { title: '', notes: '', tags: [], eventAt: 0, pinUntil: 0, categoryId: categoryId && data.categories[categoryId] ? categoryId : cats[0]?.id, ...prefill };
+  if (!isPinned(draft)) draft.pinUntil = 0;
 
   const answeredBlock = existing?.answeredAt
     ? `<div class="answered-box">${icon('answered')}<div><b>Answered ${longDate(existing.answeredAt)}</b>${existing.answerNote ? `<p>${esc(existing.answerNote)}</p>` : ''}</div></div>`
@@ -625,6 +837,9 @@ function openItemSheet({ id, categoryId, prefill } = {}) {
         <button class="btn btn-quiet" data-clear-date>Clear</button>
       </div>
 
+      <div class="field-label">Pin to every session</div>
+      <div class="chips pin-pick" data-pins></div>
+
       <div class="field-label">List</div>
       <div class="chips cat-pick">${cats
         .map((c) => `<button class="chip chip-cat" data-cat="${c.id}" aria-pressed="${c.id === draft.categoryId}" style="${catColour(c)}">${icon(c.icon)}${esc(c.name)}</button>`)
@@ -639,7 +854,13 @@ function openItemSheet({ id, categoryId, prefill } = {}) {
 
       ${
         existing
-          ? `<div class="sheet-foot">
+          ? `<div class="field-label">Updates</div>
+        <div class="updates" data-updates></div>
+        <div class="update-add">
+          <textarea class="field" name="update" rows="1" placeholder="What’s the latest?"></textarea>
+          <button class="btn" data-add-update>Add</button>
+        </div>
+        <div class="sheet-foot">
           ${
             existing.answeredAt
               ? `<button class="btn" data-unanswer>${icon('undo')} Move back to praying</button>`
@@ -658,6 +879,32 @@ function openItemSheet({ id, categoryId, prefill } = {}) {
   autosize(title);
   autosize(notes);
   if (!existing) setTimeout(() => title.focus(), 250);
+
+  const PINS = [['Off', 0], ['3 days', 3], ['1 week', 7], ['2 weeks', 14], ['Until I unpin', -1]];
+  let pinChoice = draft.pinUntil ? (draft.pinUntil >= PIN_FOREVER ? -1 : 'keep') : 0;
+  const renderPins = () => {
+    const options = [...PINS];
+    if (pinChoice === 'keep') options.splice(1, 0, [pinLabel(draft.pinUntil).replace('Pinned to ', 'Until '), 'keep']);
+    $('[data-pins]', el).innerHTML = options
+      .map(([label, v]) => `<button class="chip" data-pin="${v}" aria-pressed="${v === pinChoice}">${v ? icon('pin') : ''}${esc(label)}</button>`)
+      .join('');
+  };
+  const pinUntilValue = () => (pinChoice === 'keep' ? draft.pinUntil : pinChoice === -1 ? PIN_FOREVER : pinChoice ? pinFor(pinChoice) : 0);
+
+  const renderUpdates = () => {
+    const box = $('[data-updates]', el);
+    if (!box) return;
+    const list = [...(S.getData().items[existing.id]?.updates || [])].sort((a, b) => b.at - a.at);
+    box.innerHTML = list.length
+      ? list
+          .map(
+            (u) => `<div class="update"><span class="update-date">${esc(new Date(u.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: new Date(u.at).getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined }))}</span>
+            <span class="update-text">${esc(u.text)}</span>
+            <button class="icon-btn sm" data-del-update="${u.id}" aria-label="Delete update">${icon('x')}</button></div>`,
+          )
+          .join('')
+      : '<p class="muted small">No updates yet. Add one when you hear how things are going.</p>';
+  };
 
   const renderTags = () => {
     $('[data-tags]', el).innerHTML = draft.tags
@@ -740,7 +987,13 @@ function openItemSheet({ id, categoryId, prefill } = {}) {
     }
     const dup = !existing && findDuplicate(S.getData(), t);
     if (dup && !confirm(`“${dup.title}” is already in ${S.getData().categories[dup.categoryId]?.name || 'your lists'}. Add it again?`)) return;
-    S.saveItem({ ...draft, title: t, notes: notes.value.trim(), eventAt: fromDateInput($('[name=date]', el).value) });
+    const pending = $('[name=update]', el)?.value.trim();
+    // Only the fields this form edits, so updates added meanwhile are kept.
+    const fields = { title: t, notes: notes.value.trim(), tags: draft.tags, categoryId: draft.categoryId, eventAt: fromDateInput($('[name=date]', el).value), pinUntil: pinUntilValue() };
+    S.batch(existing ? 'Saved' : 'Added', () => {
+      const savedId = S.saveItem(existing ? { id: existing.id, ...fields } : fields);
+      if (pending) S.addUpdate(savedId, pending);
+    });
     close();
     toast(existing ? 'Saved' : 'Prayer point added', { undo: true });
   };
@@ -759,6 +1012,21 @@ function openItemSheet({ id, categoryId, prefill } = {}) {
       addTag(b.dataset.add);
     } else if ('clearDate' in b.dataset) {
       $('[name=date]', el).value = '';
+    } else if (b.dataset.pin !== undefined) {
+      pinChoice = b.dataset.pin === 'keep' ? 'keep' : Number(b.dataset.pin);
+      renderPins();
+    } else if ('addUpdate' in b.dataset) {
+      const box = $('[name=update]', el);
+      if (!box.value.trim()) return box.focus();
+      S.addUpdate(existing.id, box.value);
+      box.value = '';
+      box.style.height = '';
+      renderUpdates();
+      toast('Update added', { undo: true });
+    } else if (b.dataset.delUpdate) {
+      S.deleteUpdate(existing.id, b.dataset.delUpdate);
+      renderUpdates();
+      toast('Update deleted', { undo: true });
     } else if ('save' in b.dataset) {
       save();
     } else if ('delete' in b.dataset) {
@@ -779,6 +1047,41 @@ function openItemSheet({ id, categoryId, prefill } = {}) {
   });
 
   renderTags();
+  renderPins();
+  if (existing) {
+    renderUpdates();
+    autosize($('[name=update]', el));
+  }
+}
+
+// A quick update from the follow-up card ("Surgery went well, now rehab").
+function openUpdateSheet(id) {
+  const item = S.getData().items[id];
+  if (!item) return;
+  const { el, close } = openSheet(`
+    <div class="sheet-head">
+      <button class="btn btn-quiet" data-close>Cancel</button>
+      <h2>Update</h2>
+      <button class="btn btn-primary" data-save>Save</button>
+    </div>
+    <div class="sheet-body">
+      <p class="answer-for">${icon('chat')} ${esc(item.title)}</p>
+      <textarea class="field" name="update" rows="3" placeholder="How is it going? What should you keep praying for?"></textarea>
+      <p class="muted small">Updates build a short timeline on the prayer point, so you can see how God has been at work.</p>
+    </div>`);
+  const box = $('[name=update]', el);
+  autosize(box);
+  setTimeout(() => box.focus(), 250);
+  const save = () => {
+    if (!box.value.trim()) return box.focus();
+    S.addUpdate(id, box.value);
+    close();
+    toast('Update added', { undo: true });
+  };
+  $('[data-save]', el).addEventListener('click', save);
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save();
+  });
 }
 
 function openAnswerSheet(id, { onDone } = {}) {
@@ -900,7 +1203,7 @@ const QUICK_HINTS = [
   'Use @family to choose a list and #tag to add a tag',
 ];
 
-function openQuickAdd({ categoryId = '' } = {}) {
+function openQuickAdd({ categoryId = '', text = '' } = {}) {
   let added = 0;
   let addedIds = [];
   let parsed = [];
@@ -909,11 +1212,13 @@ function openQuickAdd({ categoryId = '' } = {}) {
   // Changes made by hand, which further typing must not undo.
   let pickedList = '';
   let droppedDate = false;
+  let droppedPin = false;
   let droppedTags = new Set();
   let extraTags = [];
   const reset = () => {
     pickedList = '';
     droppedDate = false;
+    droppedPin = false;
     droppedTags = new Set();
     extraTags = [];
     includeDups = false;
@@ -955,6 +1260,7 @@ function openQuickAdd({ categoryId = '' } = {}) {
     </div>`, { onClose: () => stopWatching() });
 
   const input = $('[name=q]', el);
+  input.value = text;
   autosize(input);
   setTimeout(() => input.focus(), 250);
 
@@ -962,7 +1268,7 @@ function openQuickAdd({ categoryId = '' } = {}) {
     if (parsed.length > 1) return p;
     const tags = p.tags.filter((t) => !droppedTags.has(t.toLowerCase()));
     for (const t of extraTags) if (!tags.some((x) => x.toLowerCase() === t.toLowerCase())) tags.push(t);
-    return { ...p, categoryId: pickedList || p.categoryId, tags, date: droppedDate ? 0 : p.date };
+    return { ...p, categoryId: pickedList || p.categoryId, tags, date: droppedDate ? 0 : p.date, pinUntil: droppedPin ? 0 : p.pinUntil };
   };
 
   const render = () => {
@@ -994,7 +1300,7 @@ function openQuickAdd({ categoryId = '' } = {}) {
           return `<div class="row row-static${skipped ? ' is-dup' : ''}" style="${catColour(cat)}">
             <span class="row-dot"></span>
             <span class="row-body"><span class="row-title">${esc(p.title)}</span>
-            <span class="row-meta">${isDup(p) ? `<span class="dup-tag">${esc(dupWhere(p))}</span>` : ''}<span class="meta-cat">${esc(cat?.name || '')}</span>${p.date ? dateChip(p.date) : ''}${tagChips(p.tags)}</span></span>
+            <span class="row-meta">${isDup(p) ? `<span class="dup-tag">${esc(dupWhere(p))}</span>` : ''}<span class="meta-cat">${esc(cat?.name || '')}</span>${pinChip(p)}${p.date ? dateChip(p.date) : ''}${tagChips(p.tags)}</span></span>
           </div>`;
         })
         .join('')}</div>`;
@@ -1023,6 +1329,11 @@ function openQuickAdd({ categoryId = '' } = {}) {
           ? `<div class="q-label">Date</div><div class="chips"><button class="chip chip-on" data-drop-date aria-label="Remove date">${icon('today')}${esc(dateLabel(p.date, true))}${icon('x')}</button></div>`
           : ''
       }
+      ${
+        p.pinUntil
+          ? `<div class="q-label">Pinned</div><div class="chips"><button class="chip chip-on" data-drop-pin aria-label="Remove pin">${icon('pin')}Every session${p.pinUntil >= PIN_FOREVER ? ' until you unpin it' : `, until ${esc(dateLabel(p.pinUntil, true))}`}${icon('x')}</button></div>`
+          : ''
+      }
       <div class="q-label">Tags</div>
       <div class="chips">
         ${p.tags.map((t) => `<button class="chip chip-on" data-drop-tag="${esc(t)}" aria-label="Remove ${esc(t)}">${esc(t)}${icon('x')}</button>`).join('')}
@@ -1045,7 +1356,7 @@ function openQuickAdd({ categoryId = '' } = {}) {
     const skipped = parsed.length - items.length;
     if (!items.length) return;
     S.batch(items.length > 1 ? `Added ${items.length}` : 'Added', () => {
-      for (const p of items) addedIds.push(S.saveItem({ title: p.title, notes: p.notes, categoryId: p.categoryId, tags: p.tags, eventAt: p.date || 0 }));
+      for (const p of items) addedIds.push(S.saveItem({ title: p.title, notes: p.notes, categoryId: p.categoryId, tags: p.tags, eventAt: p.date || 0, pinUntil: p.pinUntil || 0 }));
     });
     added += items.length;
     toast(
@@ -1061,6 +1372,8 @@ function openQuickAdd({ categoryId = '' } = {}) {
     render();
     input.focus();
   };
+
+  if (text) setTimeout(render, 0);
 
   let timer;
   input.addEventListener('input', () => {
@@ -1088,6 +1401,7 @@ function openQuickAdd({ categoryId = '' } = {}) {
       return;
     } else if (b.dataset.pick) pickedList = b.dataset.pick;
     else if ('dropDate' in b.dataset) droppedDate = true;
+    else if ('dropPin' in b.dataset) droppedPin = true;
     else if (b.dataset.dropTag) {
       const key = b.dataset.dropTag.toLowerCase();
       droppedTags.add(key);
@@ -1098,7 +1412,7 @@ function openQuickAdd({ categoryId = '' } = {}) {
     } else if ('more' in b.dataset) {
       const p = finalise(parsed[0]);
       close();
-      openItemSheet({ prefill: { title: p.title, notes: p.notes, categoryId: p.categoryId, tags: p.tags, eventAt: p.date || 0 } });
+      openItemSheet({ prefill: { title: p.title, notes: p.notes, categoryId: p.categoryId, tags: p.tags, eventAt: p.date || 0, pinUntil: p.pinUntil || 0 } });
       return;
     } else return;
     render();
@@ -1143,6 +1457,16 @@ const ACTIONS = {
   'pray-skip': () => prayAdvance(),
   'pray-back': () => prayBack(),
   'pray-answered': (b) => openAnswerSheet(b.dataset.id),
+  'fu-update': (b) => openUpdateSheet(b.dataset.id),
+  'fu-answered': (b) => openAnswerSheet(b.dataset.id),
+  'fu-later': (b) => {
+    S.followUpLater(b.dataset.id, startOfDay() + 86400000);
+    toast('Back tomorrow', { undo: true });
+  },
+  'fu-done': (b) => {
+    S.followedUp(b.dataset.id);
+    toast('Followed up', { undo: true });
+  },
   'pray-close': () => {
     session = null;
     location.hash = '#/today';
@@ -1178,13 +1502,39 @@ const ACTIONS = {
     changingPass = !changingPass;
     refreshSync();
   },
-  export: () => {
-    const blob = new Blob([JSON.stringify(S.getData(), null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `letspray-backup-${dayKey()}.json`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  'backup-export': () => {
+    backupPanel = backupPanel === 'export' ? '' : 'export';
+    refreshBackup();
+  },
+  'backup-plain': () => {
+    backupPanel = 'plain';
+    refreshBackup();
+  },
+  'backup-plain-go': () => exportBackup(null),
+  'backup-cancel': () => {
+    backupPanel = '';
+    pendingImport = null;
+    refreshBackup();
+  },
+  'rem-day': (b) => {
+    const r = reminderPrefs();
+    const day = Number(b.dataset.day);
+    const days = r.days.includes(day) ? r.days.filter((d) => d !== day) : [...r.days, day].sort();
+    if (days.length) updateReminder({ days });
+  },
+  'rem-calendar': () => saveFile('letspray-reminder.ics', Notify.calendarFile(reminderPrefs()), 'text/calendar'),
+  'copy-link': async (b) => {
+    try {
+      await navigator.clipboard.writeText(b.dataset.link);
+      toast('Link copied');
+    } catch {
+      const code = b.previousElementSibling;
+      const range = document.createRange();
+      range.selectNodeContents(code);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      toast('Link selected. Copy it from the menu.');
+    }
   },
 };
 
@@ -1198,15 +1548,77 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', async (e) => {
   if (e.target.dataset.act !== 'import') return;
   const file = e.target.files[0];
-  if (!file) return;
-  try {
-    const parsed = JSON.parse(await file.text());
-    S.replaceData(merge(S.getData(), parsed));
-    toast('Backup imported');
-  } catch {
-    toast('That file is not a Let’s Pray backup');
-  }
   e.target.value = '';
+  if (!file) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    return toast('That file is not a Let’s Pray backup');
+  }
+  if (isEnvelope(parsed)) {
+    pendingImport = parsed;
+    backupPanel = 'import';
+    refreshBackup();
+    $('#backup-section input[name=pass]')?.focus();
+  } else if (parsed && (parsed.items || parsed.categories)) {
+    S.mergeIn(parsed, merge);
+    toast('Backup imported', { undo: true });
+  } else toast('That file is not a Let’s Pray backup');
+});
+
+document.addEventListener('change', (e) => {
+  if (e.target.name === 'how') {
+    const box = $('[data-new-pass]', e.target.closest('form'));
+    if (box) box.hidden = e.target.value !== 'new';
+  } else if (e.target.dataset.rem) {
+    const key = e.target.dataset.rem;
+    if (key === 'time') {
+      const [hour, minute] = e.target.value.split(':').map(Number);
+      if (!Number.isNaN(hour)) updateReminder({ hour, minute: minute || 0 });
+    } else updateReminder({ [key]: e.target.checked });
+  }
+});
+
+document.addEventListener('submit', async (e) => {
+  const form = e.target.closest('form[data-form^="backup-"]');
+  if (!form) return;
+  e.preventDefault();
+  const error = $('[data-form-error]', form);
+  const btn = $('button[type=submit]', form);
+  const busy = (on) => {
+    btn.disabled = on;
+  };
+  try {
+    if (form.dataset.form === 'backup-export') {
+      busy(true);
+      if (form.how?.value === 'sync') {
+        const record = await loadKey();
+        if (!record) throw new Error('Sync is locked on this device. Choose a different passphrase instead.');
+        return await exportBackup(record);
+      }
+      const pass = normalisePassphrase(form.pass.value);
+      if (pass.length < MIN_PASSPHRASE) throw new Error(`Use at least ${MIN_PASSPHRASE} characters. Four random words work well.`);
+      if (normalisePassphrase(form.pass2.value) !== pass) throw new Error('Those two passphrases don’t match.');
+      const salt = newSalt();
+      return await exportBackup({ key: await deriveKey(pass, salt, ITERATIONS), salt, iterations: ITERATIONS });
+    }
+    busy(true);
+    let data;
+    try {
+      data = await unseal(pendingImport, await envelopeKey(pendingImport, form.pass.value));
+    } catch {
+      throw new Error('That passphrase doesn’t open this backup.');
+    }
+    S.mergeIn(data, merge);
+    pendingImport = null;
+    backupPanel = '';
+    refreshBackup();
+    toast('Backup imported', { undo: true });
+  } catch (err) {
+    if (error) error.textContent = err.message;
+    busy(false);
+  }
 });
 
 const SYNC_FORMS = {
@@ -1295,6 +1707,11 @@ function route() {
 }
 
 function render() {
+  if (location.hash.startsWith('#/add')) {
+    const q = new URLSearchParams(location.hash.split('?')[1] || '');
+    history.replaceState(null, '', '#/today');
+    setTimeout(() => handleAddLink(q.get('text') || '', q.get('save') === '1'), 0);
+  }
   const r = route();
   const view = VIEWS[r.name] || VIEWS.today;
   const scroll = window.scrollY;
@@ -1334,6 +1751,31 @@ Sync.onStatus((st) => {
 
 applyTheme();
 render();
+
+// In the App Store app: notifications, and letspray:// links from Shortcuts.
+if (Notify.isNativeApp()) {
+  Notify.onOpen((to) => {
+    location.hash = to;
+  });
+  const openLink = (url) => {
+    try {
+      const u = new URL(url);
+      if (u.hostname === 'add' || u.pathname.replace(/\//g, '') === 'add') location.hash = `#/add?${u.searchParams}`;
+    } catch {
+      // not a link we handle
+    }
+  };
+  const App = window.Capacitor?.Plugins?.App;
+  App?.addListener('appUrlOpen', ({ url }) => openLink(url));
+  // A Shortcut can also start the app from closed.
+  App?.getLaunchUrl?.().then((r) => r?.url && openLink(r.url)).catch(() => {});
+  Notify.permission().then((p) => {
+    notifyState = p;
+  });
+  S.subscribe((kind) => kind !== 'prefs' && scheduleReminders());
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && scheduleReminders());
+  scheduleReminders();
+}
 Sync.initSync();
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {

@@ -150,3 +150,35 @@ test('duplicate titles match loosely', async () => {
   assert.equal(findDuplicate(d, 'Sue and Ben Carter', 'a'), null);
   assert.equal(findDuplicate(d, 'Old prayer'), null); // answered ones can be prayed for again
 });
+
+test('pinned points open every session without taking a list’s places', async () => {
+  const { isPinned, pinFor } = await import('../js/model.js');
+  const now = new Date(2026, 9, 24, 10).getTime();
+  const d = emptyData();
+  d.categories['cat-people'].perSession = 1;
+  d.categories['cat-family'].perSession = 0; // a list switched off still shows its pinned point
+  d.items.a = item('a', { lastPrayedAt: 1 });
+  d.items.b = item('b', { lastPrayedAt: 2 });
+  d.items.p = item('p', { lastPrayedAt: now, pinUntil: pinFor(3, now) });
+  d.items.f = item('f', { categoryId: 'cat-family', pinUntil: pinFor(1, now) });
+  const ids = buildSession(d, 1, now).map((c) => c.itemId);
+  assert.deepEqual(ids, ['p', 'f', 'a']);
+  assert.equal(isPinned(d.items.p, now + 2 * 86400000), true);
+  assert.equal(isPinned(d.items.p, now + 3 * 86400000), false); // runs out after three days
+  assert.deepEqual(buildSession(d, 1, now + 3 * 86400000).map((c) => c.itemId), ['a']);
+});
+
+test('follow-ups appear after the date and clear when done or put off', async () => {
+  const { followUps } = await import('../js/model.js');
+  const DAY = 86400000;
+  const now = new Date(2026, 9, 24, 10).getTime();
+  const d = emptyData();
+  d.items.past = item('past', { eventAt: new Date(2026, 9, 23).getTime() });
+  d.items.today = item('today', { eventAt: new Date(2026, 9, 24).getTime() });
+  d.items.old = item('old', { eventAt: now - 20 * DAY });
+  d.items.done = item('done', { eventAt: now - 2 * DAY, followedUpAt: now - DAY });
+  d.items.later = item('later', { eventAt: now - 2 * DAY, followUpAfter: now + DAY });
+  d.items.ans = item('ans', { eventAt: now - 2 * DAY, answeredAt: now });
+  assert.deepEqual(followUps(d, now).map((i) => i.id), ['past']);
+  assert.deepEqual(followUps(d, now + 2 * DAY).map((i) => i.id).sort(), ['later', 'past', 'today']);
+});

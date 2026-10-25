@@ -110,6 +110,27 @@ export function undo() {
   return c;
 }
 
+// Bring in a backup: merges record by record (latest edit wins) and can be
+// undone like any other change.
+export function mergeIn(incoming, mergeFn) {
+  return batch('Backup imported', () => {
+    const merged = mergeFn(data, incoming);
+    for (const kind of ['categories', 'items']) {
+      for (const [id, rec] of Object.entries(merged[kind])) {
+        if (JSON.stringify(rec) !== JSON.stringify(data[kind][id])) {
+          remember(kind, id);
+          data[kind][id] = rec;
+        }
+      }
+    }
+    for (const [key, n] of Object.entries(merged.days)) {
+      if (change && !(key in change.days)) change.days[key] = data.days[key];
+      data.days[key] = n;
+    }
+    commit();
+  });
+}
+
 // ---- Categories ----
 
 export function saveCategory(fields) {
@@ -198,6 +219,62 @@ export function markPrayed(id) {
     data.days[key] = (data.days[key] === true ? 1 : Number(data.days[key]) || 0) + 1;
     commit();
   }, { itemId: id });
+}
+
+// ---- Updates, pins and follow-ups ----
+
+export function addUpdate(id, text) {
+  return batch('Update added', () => {
+    const item = data.items[id];
+    if (!item || !text.trim()) return;
+    remember('items', id);
+    const t = now();
+    const update = { id: uid('up'), at: t, text: text.trim() };
+    // Adding an update after the date has passed counts as following up.
+    data.items[id] = { ...item, updates: [...(item.updates || []), update], followedUpAt: t, updatedAt: t };
+    commit();
+    return update.id;
+  });
+}
+
+export function deleteUpdate(id, updateId) {
+  return batch('Update deleted', () => {
+    const item = data.items[id];
+    if (!item) return;
+    remember('items', id);
+    data.items[id] = { ...item, updates: (item.updates || []).filter((u) => u.id !== updateId), updatedAt: now() };
+    commit();
+  });
+}
+
+export function setPin(id, pinUntil) {
+  return batch(pinUntil ? 'Pinned' : 'Unpinned', () => {
+    const item = data.items[id];
+    if (!item) return;
+    remember('items', id);
+    data.items[id] = { ...item, pinUntil: pinUntil || 0, updatedAt: now() };
+    commit();
+  });
+}
+
+export function followedUp(id) {
+  return batch('Followed up', () => {
+    const item = data.items[id];
+    if (!item) return;
+    remember('items', id);
+    data.items[id] = { ...item, followedUpAt: now(), updatedAt: now() };
+    commit();
+  });
+}
+
+export function followUpLater(id, until) {
+  return batch('Follow-up moved', () => {
+    const item = data.items[id];
+    if (!item) return;
+    remember('items', id);
+    data.items[id] = { ...item, followUpAfter: until, updatedAt: now() };
+    commit();
+  });
 }
 
 export function markAnswered(id, answerNote = '') {
