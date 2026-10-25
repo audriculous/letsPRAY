@@ -78,3 +78,30 @@ test('pin and unpin', () => {
   S.setPin(id, 0);
   assert.equal(S.getData().items[id].pinUntil, 0);
 });
+
+test('reading plans: add, tick, remove and undo', () => {
+  const id = S.addPlan({ kind: 'psalms', start: '2026-10-01', pace: 'daily' });
+  S.tick(id, ['0.0'], true);
+  assert.equal(S.getData().plans[id].ticks['0.0'].on, true);
+  assert.equal(S.lastUndo().label, 'Plan added'); // ticks are not undo steps
+  S.removePlan(id);
+  assert.ok(S.getData().plans[id].deleted);
+  S.undo();
+  const back = S.getData().plans[id];
+  assert.ok(!back.deleted);
+  assert.equal(back.ticks['0.0'].on, true);
+  const fresh = S.restartPlan(id, '2026-10-25');
+  assert.ok(S.getData().plans[id].deleted);
+  assert.deepEqual(S.getData().plans[fresh].ticks, {});
+  assert.equal(S.getData().plans[fresh].kind, 'psalms');
+});
+
+test('journal pages save without becoming undo steps', () => {
+  const before = S.lastUndo();
+  S.saveJournal('2026-10-25', { text: 'Psalm 23 today' });
+  S.saveJournal('2026-10-25', { photos: [{ id: 'ph1', text: '' }] });
+  const page = S.getData().journal['2026-10-25'];
+  assert.equal(page.text, 'Psalm 23 today');
+  assert.equal(page.photos.length, 1);
+  assert.equal(S.lastUndo(), before);
+});

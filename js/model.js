@@ -24,7 +24,7 @@ export function emptyData() {
   DEFAULT_CATEGORIES.forEach((c, i) => {
     categories[c.id] = { ...c, order: i, perSession: 2, updatedAt: 0 };
   });
-  return { version: SCHEMA_VERSION, categories, items: {}, days: {} };
+  return { version: SCHEMA_VERSION, categories, items: {}, days: {}, plans: {}, journal: {} };
 }
 
 // Bring any loaded or remote blob up to the current shape.
@@ -36,6 +36,8 @@ export function normalise(data) {
     categories: { ...base.categories, ...(data.categories || {}) },
     items: { ...(data.items || {}) },
     days: { ...(data.days || {}) },
+    plans: { ...(data.plans || {}) },
+    journal: { ...(data.journal || {}) },
   };
 }
 
@@ -59,6 +61,28 @@ function mergeDays(a, b) {
   return out;
 }
 
+// Reading plans: the latest edit wins for the plan itself (removing it, its
+// pace), but ticks merge one by one, so ticking a reading on the phone and
+// another on the Mac the same morning keeps both.
+function mergeTicks(a = {}, b = {}) {
+  const out = { ...a };
+  for (const [k, t] of Object.entries(b)) if (!out[k] || (t.at || 0) > (out[k].at || 0)) out[k] = t;
+  return out;
+}
+function mergePlans(a = {}, b = {}) {
+  const out = { ...a };
+  for (const [id, rec] of Object.entries(b)) {
+    const mine = out[id];
+    if (!mine) {
+      out[id] = rec;
+      continue;
+    }
+    const [newer, older] = (rec.updatedAt || 0) > (mine.updatedAt || 0) ? [rec, mine] : [mine, rec];
+    out[id] = newer.deleted || older.deleted ? newer : { ...newer, ticks: mergeTicks(older.ticks, newer.ticks) };
+  }
+  return out;
+}
+
 export function merge(local, remote) {
   const a = normalise(local);
   const b = normalise(remote);
@@ -67,6 +91,8 @@ export function merge(local, remote) {
     categories: mergeRecords(a.categories, b.categories),
     items: mergeRecords(a.items, b.items),
     days: mergeDays(a.days, b.days),
+    plans: mergePlans(a.plans, b.plans),
+    journal: mergeRecords(a.journal, b.journal),
   };
 }
 
@@ -80,6 +106,8 @@ export function fingerprint(data) {
     sortObj(data.categories),
     sortObj(data.items),
     sortObj(data.days),
+    sortObj(data.plans || {}),
+    sortObj(data.journal || {}),
   ]);
 }
 

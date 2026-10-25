@@ -81,14 +81,14 @@ function remember(kind, id) {
 // Groups everything `fn` does into one undoable change.
 export function batch(label, fn, meta = {}) {
   const outer = depth === 0;
-  if (outer) change = { label, meta, items: {}, categories: {}, days: {} };
+  if (outer) change = { label, meta, items: {}, categories: {}, days: {}, plans: {}, journal: {} };
   depth += 1;
   try {
     return fn();
   } finally {
     depth -= 1;
     if (outer) {
-      const touched = Object.keys(change.items).length + Object.keys(change.categories).length;
+      const touched = ['items', 'categories', 'plans', 'journal'].reduce((n, k) => n + Object.keys(change[k]).length, 0);
       if (touched) lastChange = change;
       change = null;
     }
@@ -108,6 +108,13 @@ export function undo() {
       data[kind][id] = prev === undefined ? { id, deleted: true, categoryId: was?.categoryId, updatedAt: t, sharedAt: t } : { ...prev, updatedAt: t, sharedAt: t };
     }
   }
+  for (const kind of ['plans', 'journal']) {
+    for (const [id, prev] of Object.entries(c[kind])) {
+      // A restored plan's ticks are re-stamped too, so they win when merged.
+      const ticks = prev?.ticks && Object.fromEntries(Object.entries(prev.ticks).map(([k, v]) => [k, { ...v, at: t }]));
+      data[kind][id] = prev === undefined ? { id, deleted: true, updatedAt: t } : { ...prev, ...(ticks ? { ticks } : {}), updatedAt: t };
+    }
+  }
   for (const [key, prev] of Object.entries(c.days)) {
     if (prev === undefined) delete data.days[key];
     else data.days[key] = prev;
@@ -121,7 +128,7 @@ export function undo() {
 export function mergeIn(incoming, mergeFn) {
   return batch('Backup imported', () => {
     const merged = mergeFn(data, incoming);
-    for (const kind of ['categories', 'items']) {
+    for (const kind of ['categories', 'items', 'plans', 'journal']) {
       for (const [id, rec] of Object.entries(merged[kind])) {
         if (JSON.stringify(rec) !== JSON.stringify(data[kind][id])) {
           remember(kind, id);
@@ -316,4 +323,66 @@ export function applyRemote(fn) {
     write(DATA_KEY, data);
     emit('remote');
   }
+}
+
+// ---- Devotion: reading plans and the journal ----
+
+export function addPlan(fields) {
+  return batch('Plan added', () => {
+    const id = uid('plan');
+    remember('plans', id);
+    data.plans[id] = { ...fields, id, ticks: {}, createdAt: now(), updatedAt: now() };
+    commit();
+    return id;
+  });
+}
+
+export function removePlan(id) {
+  return batch('Plan removed', () => {
+    remember('plans', id);
+    data.plans[id] = { id, deleted: true, updatedAt: now() };
+    commit();
+  });
+}
+
+// Starting again is a fresh plan, so old ticks on another device can't
+// come back through the merge.
+export function restartPlan(id, start) {
+  return batch('Plan restarted', () => {
+    const { kind, books, perDay, pace } = data.plans[id];
+    remember('plans', id);
+    data.plans[id] = { id, deleted: true, updatedAt: now() };
+    const next = uid('plan');
+    remember('plans', next);
+    data.plans[next] = { kind, books, perDay, pace, start, id: next, ticks: {}, createdAt: now(), updatedAt: now() };
+    commit();
+    return next;
+  });
+}
+
+export function setPlan(id, patch) {
+  return batch('Plan saved', () => {
+    remember('plans', id);
+    data.plans[id] = { ...data.plans[id], ...patch, updatedAt: now() };
+    commit();
+  });
+}
+
+// Ticks are quick to change back, so they are not part of undo.
+export function tick(id, keys, on) {
+  const plan = data.plans[id];
+  if (!plan || plan.deleted) return;
+  const t = now();
+  const ticks = { ...plan.ticks };
+  for (const k of keys) ticks[k] = { on, at: t };
+  data.plans[id] = { ...plan, ticks, updatedAt: t };
+  commit();
+}
+
+// One journal page per day, keyed by its date ("2026-10-25"). Typing saves
+// as you go, so it is not undoable either.
+export function saveJournal(day, patch) {
+  const prev = data.journal[day];
+  data.journal[day] = { text: '', photos: [], ...(prev && !prev.deleted ? prev : {}), ...patch, id: day, updatedAt: now() };
+  commit();
 }

@@ -23,6 +23,7 @@
 		7A11CE000000000000000013 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7A11CE000000000000000012 /* SwiftUI.framework */; };
 		7A11CE00000000000000001C /* LetsPrayWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 7A11CE00000000000000000F /* LetsPrayWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7A11CE00000000000000002B /* CloudSharePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A11CE00000000000000002A /* CloudSharePlugin.swift */; };
+		7A11CE00000000000000002D /* OCRPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A11CE00000000000000002C /* OCRPlugin.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -71,6 +72,7 @@
 		7A11CE000000000000000010 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		7A11CE000000000000000012 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		7A11CE00000000000000002A /* CloudSharePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSharePlugin.swift; sourceTree = "<group>"; };
+		7A11CE00000000000000002C /* OCRPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OCRPlugin.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -121,6 +123,7 @@
 				7A11CE000000000000000001 /* MainViewController.swift */,
 				7A11CE000000000000000003 /* WidgetBridgePlugin.swift */,
 				7A11CE00000000000000002A /* CloudSharePlugin.swift */,
+				7A11CE00000000000000002C /* OCRPlugin.swift */,
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
@@ -270,6 +273,7 @@
 				7A11CE000000000000000002 /* MainViewController.swift in Sources */,
 				7A11CE000000000000000004 /* WidgetBridgePlugin.swift in Sources */,
 				7A11CE00000000000000002B /* CloudSharePlugin.swift in Sources */,
+				7A11CE00000000000000002D /* OCRPlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

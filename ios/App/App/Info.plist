@@ -77,6 +77,10 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Take a photo of your journal page to keep with the day.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Choose a photo of your journal page to keep with the day.</string>
 	<key>CKSharingSupported</key>
 	<true/>
 </dict>

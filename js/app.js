@@ -1,6 +1,6 @@
 import * as S from './store.js';
 import * as Sync from './sync.js';
-import { activeCategories, itemsIn, answeredItems, buildSession, streak, weekStats, allTags, live, dayKey, startOfDay, merge, listDue, nextDue, findDuplicate, titleKey, isPinned, pinFor, PIN_FOREVER, followUps, latestUpdate, WEEKDAY_NAMES, COLOURS } from './model.js';
+import { activeCategories, itemsIn, answeredItems, buildSession, streak, weekStats, allTags, live, uid, dayKey, startOfDay, merge, listDue, nextDue, findDuplicate, titleKey, isPinned, pinFor, PIN_FOREVER, followUps, latestUpdate, WEEKDAY_NAMES, COLOURS } from './model.js';
 import { parseMany } from './parse.js';
 import { MIN_PASSPHRASE, normalisePassphrase, ITERATIONS, newSalt, deriveKey, seal, unseal, envelopeKey, isEnvelope } from './crypto.js';
 import { loadKey } from './keystore.js';
@@ -10,6 +10,8 @@ import * as Share from './share.js';
 import { suggestTags } from './tags.js';
 import { icon, CATEGORY_ICONS } from './icons.js';
 import { verseFor } from './verses.js';
+import { BOOKS, PLANS, planDays, planTitle, progress, isTicked, dayDone, tickKey, readLink, defaultPace, dateOfDay, fromKey, startFor, readOn } from './bible.js';
+import * as Photos from './photos.js';
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
@@ -221,6 +223,7 @@ VIEWS.today = () => {
     <h1 class="greeting display">${greeting()}</h1>
     ${hero}
     ${followCard}
+    ${devotionCard()}
     ${total ? weekCard : ''}
     ${groups
       .map(
@@ -625,7 +628,7 @@ function backupSection() {
     </form>`;
   }
   return `<div class="card pad">
-    <p class="muted small">Save everything as one file to keep in iCloud Drive or email to yourself. Backups are locked with a passphrase. Importing merges with what is already here, and can be undone.</p>
+    <p class="muted small">Save everything as one file, journal photos included, to keep in iCloud Drive or email to yourself. Backups are locked with a passphrase. Importing merges with what is already here, and can be undone.</p>
     <div class="btn-row">
       <button class="btn" data-act="backup-export">${icon('lock')} Export backup</button>
       <label class="btn">Import backup<input type="file" accept="application/json,.json" data-act="import" hidden></label>
@@ -659,7 +662,9 @@ async function saveFile(name, text, type = 'application/json') {
 }
 
 async function exportBackup(record) {
-  const envelope = record ? { ...(await seal(S.getData(), record)), backup: true, exportedAt: Date.now() } : S.getData();
+  const photos = await photosForBackup(S.getData());
+  const full = Object.keys(photos).length ? { ...S.getData(), photos } : S.getData();
+  const envelope = record ? { ...(await seal(full, record)), backup: true, exportedAt: Date.now() } : full;
   await saveFile(`letspray-backup-${dayKey()}.json`, JSON.stringify(envelope, null, record ? 0 : 2));
   backupPanel = '';
   refreshBackup();
@@ -711,6 +716,9 @@ VIEWS.settings = () => {
       .join('')}
   </div>
 
+  <h3 class="section-title">Devotion</h3>
+  ${devotionSection()}
+
   <h3 class="section-title">Appearance</h3>
   <div class="segmented" role="radiogroup">
     ${['auto', 'light', 'dark'].map((t) => `<button role="radio" aria-checked="${prefs.theme === t}" data-act="theme" data-theme="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
@@ -731,6 +739,443 @@ VIEWS.settings = () => {
   }
   <p class="muted small center foot">Let’s Pray · your data lives on this device${prefs.sync ? ', with an encrypted copy in your GitHub account' : ''}.</p>`;
 };
+
+// ---------- Devotion: reading plans and journal ----------
+
+const VERSIONS = ['NIV', 'ESV', 'NASB', 'CSB'];
+const bibleVersion = () => S.getPrefs().bibleVersion || 'NIV';
+const livePlans = (data = S.getData()) =>
+  Object.values(data.plans)
+    .filter(live)
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+const readAhead = new Set(); // plans showing the next day early
+const weekdayDate = (ts) => new Date(ts).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+
+function planStatus(p) {
+  if (p.finished) return 'Finished. Well done';
+  if (p.behind) return `${plural(p.behind, 'day')} behind`;
+  if (p.next >= p.due) return p.next === p.due && p.due ? 'Done for today' : p.due ? 'Ahead' : 'Starts soon';
+  return 'On track';
+}
+
+function readingRow(plan, day, r, reading) {
+  const on = isTicked(plan, day, r);
+  return `<div class="dv-reading${on ? ' is-on' : ''}">
+    <button class="dv-tick" data-act="tick" data-plan="${plan.id}" data-day="${day}" data-r="${r}" aria-pressed="${on}" aria-label="${on ? 'Read' : 'Mark as read'}: ${esc(reading.label)}">${icon('check')}</button>
+    <span class="dv-ref">${esc(reading.label)}</span>
+    <a class="btn btn-sm" href="${readLink(reading.label, bibleVersion())}" target="_blank" rel="noopener">${esc(bibleVersion())} ${icon('external')}</a>
+  </div>`;
+}
+
+function planCard(plan) {
+  const days = planDays(plan);
+  const p = progress(plan);
+  // Once today's reading is done it stays on show (so a tick can be undone),
+  // with the next day a tap away.
+  const ahead = readAhead.has(plan.id);
+  let day = p.next;
+  if (p.finished) day = days.length - 1;
+  else if (p.caughtUp && !ahead && p.next > 0) day = p.next - 1;
+  return `<section class="card panel dv-plan">
+    <a class="panel-head" href="#/plan/${plan.id}">${icon('book')}<h3>${esc(planTitle(plan))}</h3><span class="panel-meta">Day ${day + 1} of ${days.length} ${icon('chevron')}</span></a>
+    <div class="dv-bar" aria-hidden="true"><span style="width:${p.percent}%"></span></div>
+    <p class="dv-status${p.behind ? ' is-behind' : ''}">${esc(planStatus(p))} · ${p.percent}% read${
+      p.behind ? ` <button class="link-btn" data-act="plan-shift" data-plan="${plan.id}">Move my dates</button>` : ''
+    }</p>
+    <div class="dv-readings">${days[day].map((reading, r) => readingRow(plan, day, r, reading)).join('')}</div>
+    ${
+      !p.finished && day !== p.next
+        ? `<button class="link-row dv-ahead" data-act="read-ahead" data-plan="${plan.id}">${icon('check')} Read ahead to day ${p.next + 1} ${icon('chevron')}</button>`
+        : ''
+    }
+  </section>`;
+}
+
+function journalCard(key) {
+  const data = S.getData();
+  const entry = live(data.journal[key]) ? data.journal[key] : { text: '', photos: [] };
+  const today = dayKey();
+  const ts = fromKey(key);
+  const day = (n) => dayKey(ts + n * 86400000 + 43200000); // noon, so clock changes never skip a day
+  const read = readOn(data.plans, key);
+  const touch = matchMedia('(pointer: coarse)').matches;
+  return `<section class="card pad dv-journal">
+    <div class="dv-daynav">
+      <a class="icon-btn sm" href="#/devotion/${day(-1)}" aria-label="Day before">${icon('back')}</a>
+      <b>${key === today ? 'Today' : day(1) === today ? 'Yesterday' : esc(weekdayDate(ts))}</b>
+      ${key < today ? `<a class="icon-btn sm" href="#/devotion/${day(1) >= today ? '' : day(1)}" aria-label="Next day">${icon('chevron')}</a>` : '<span class="icon-btn sm dv-nav-gap" aria-hidden="true"></span>'}
+    </div>
+    ${read.length ? `<p class="dv-read">${icon('book')}<span>Read: ${esc(read.join(', '))}</span></p>` : ''}
+    <textarea class="field dv-text" data-journal="${key}" rows="4" placeholder="What stood out? What is God showing you? What will you pray about?">${esc(entry.text)}</textarea>
+    ${
+      entry.photos.length
+        ? `<div class="dv-photos">${entry.photos
+            .map(
+              (ph) => `<button class="dv-thumb" data-act="photo-open" data-day="${key}" data-id="${ph.id}" aria-label="Open photo">
+              <img data-photo="${ph.id}" alt="">
+              <span class="dv-thumb-none">${icon('image')}<small>On another device</small></span>
+              ${ph.text ? `<span class="dv-thumb-text">${icon('scan')}</span>` : ''}
+            </button>`,
+            )
+            .join('')}</div>`
+        : ''
+    }
+    <div class="btn-row">
+      ${touch ? `<label class="btn">${icon('camera')} Take photo<input type="file" accept="image/*" capture="environment" data-photo-add="${key}" hidden></label>` : ''}
+      <label class="btn">${icon('image')} ${touch ? 'Choose' : 'Add photo'}<input type="file" accept="image/*" multiple data-photo-add="${key}" hidden></label>
+    </div>
+    <p class="muted small dv-hint">Saved as you type. Snap a handwritten page and tap it to read the text into your journal.</p>
+  </section>`;
+}
+
+VIEWS.devotion = (arg) => {
+  const data = S.getData();
+  const today = dayKey();
+  const key = /^\d{4}-\d{2}-\d{2}$/.test(arg) && arg <= today ? arg : today;
+  const plans = livePlans(data);
+  const reading = plans.length
+    ? `${plans.map(planCard).join('')}
+       <button class="btn dv-add" data-act="plan-new">${icon('plus')} Add a reading plan</button>`
+    : `<section class="card hero">
+        <div class="eyebrow">Read through the Bible</div>
+        <h2 class="display">Pick a plan</h2>
+        <p class="muted">Bible in a year, the New Testament, the Gospels in a month, or book by book at your own pace. Tick off each reading as you go.</p>
+        <button class="btn btn-accent btn-wide" data-act="plan-new">${icon('book')} Choose a reading plan</button>
+      </section>`;
+  const entries = Object.values(data.journal).filter((e) => live(e) && (e.text || e.photos?.length)).length;
+  return `${header('Devotion', { kicker: longDate(Date.now()) })}
+    <h3 class="section-title">Reading</h3>
+    ${reading}
+    <h3 class="section-title">Journal</h3>
+    ${journalCard(key)}
+    ${entries ? `<a class="link-row" href="#/journal">${icon('pen')} All journal entries <span class="chip-n">${entries}</span> ${icon('chevron')}</a>` : ''}`;
+};
+
+VIEWS.plan = (id) => {
+  const data = S.getData();
+  const plan = data.plans[id];
+  if (!live(plan)) return VIEWS.devotion('');
+  const days = planDays(plan);
+  const p = progress(plan);
+  const ends = dateOfDay(plan, days.length - 1);
+  const tile = (n, label) => `<div class="tile"><b>${n}</b><span>${label}</span></div>`;
+  return `${header(esc(planTitle(plan)), { back: '#/devotion', kicker: `${esc(planStatus(p))} · started ${esc(shortDate(fromKey(plan.start)))}${plan.pace === 'weekdays' ? ' · weekdays' : ''}` })}
+    <section class="card pad">
+      <div class="tiles">${tile(p.done, 'Read')}${tile(days.length - p.done, 'To go')}${tile(p.behind, 'Behind')}${tile(`${p.percent}%`, 'Done')}</div>
+      <p class="muted small dv-ends">${p.finished ? 'Every day read.' : `On schedule to finish ${esc(longDate(ends))}.`} Tap a day to tick all of it.</p>
+      <div class="btn-row">
+        ${p.behind ? `<button class="btn" data-act="plan-shift" data-plan="${id}">${icon('clock')} Move my dates</button>` : ''}
+        <button class="btn" data-act="plan-restart" data-plan="${id}">${icon('undo')} Start again</button>
+        <button class="btn btn-danger" data-act="plan-remove" data-plan="${id}">${icon('trash')} Remove</button>
+      </div>
+    </section>
+    <div class="card list dv-days">${days
+      .map((readings, d) => {
+        const done = dayDone(plan, d, days);
+        const some = !done && readings.some((_, r) => isTicked(plan, d, r));
+        return `<button class="row dv-day${done ? ' is-done' : ''}${d === p.next ? ' is-next' : ''}" data-act="tick-day" data-plan="${id}" data-day="${d}" aria-pressed="${done}">
+          <span class="dv-tick${some ? ' is-some' : ''}" aria-hidden="true">${icon('check')}</span>
+          <span class="row-body"><span class="row-title">${esc(readings.map((r) => r.label).join(' · '))}</span><span class="row-notes">Day ${d + 1} · ${esc(weekdayDate(dateOfDay(plan, d)))}</span></span>
+        </button>`;
+      })
+      .join('')}</div>`;
+};
+
+let journalQuery = '';
+function journalResults() {
+  const data = S.getData();
+  const q = journalQuery.trim().toLowerCase();
+  const entries = Object.values(data.journal)
+    .filter((e) => live(e) && (e.text || e.photos?.length))
+    .filter((e) => !q || [e.text, ...(e.photos || []).map((ph) => ph.text)].join(' ').toLowerCase().includes(q))
+    .sort((a, b) => (a.id < b.id ? 1 : -1));
+  if (!entries.length) return emptyState(q ? 'Nothing found' : 'No entries yet', q ? 'No journal entry has those words.' : 'Write or snap a page on the Devotion screen and it will be kept here.');
+  return `<div class="journal">${entries
+    .map((e) => {
+      const read = readOn(data.plans, e.id);
+      const text = e.text || (e.photos || []).map((ph) => ph.text).filter(Boolean).join(' ');
+      return `<a class="journal-entry" href="#/devotion/${e.id}" style="--c: var(--accent)">
+        <span class="journal-date">${esc(longDate(fromKey(e.id)))}</span>
+        ${read.length ? `<span class="journal-title">${esc(read.join(', '))}</span>` : ''}
+        ${text ? `<span class="dv-excerpt">${esc(text.length > 220 ? `${text.slice(0, 220).trim()}…` : text)}</span>` : ''}
+        ${e.photos?.length ? `<span class="journal-meta">${icon('image', 'inline-ic')} ${plural(e.photos.length, 'photo')}</span>` : ''}
+      </a>`;
+    })
+    .join('')}</div>`;
+}
+
+VIEWS.journal = () => `${header('Journal', { back: '#/devotion', kicker: 'Your devotion entries' })}
+  <label class="search">${icon('search')}<input id="journal-search" type="search" placeholder="Search your journal" value="${esc(journalQuery)}" autocomplete="off"></label>
+  <div id="journal-body">${journalResults()}</div>`;
+
+// A short card on Today pointing to the next reading.
+function devotionCard() {
+  const plans = livePlans();
+  if (!plans.length) return '';
+  const lines = plans.map((plan) => {
+    const p = progress(plan);
+    const days = planDays(plan);
+    const done = p.finished || p.caughtUp;
+    const text = done ? planStatus(p) : days[p.next].map((r) => r.label).join(' · ');
+    return `<a class="dv-line${done ? ' is-done' : ''}" href="#/devotion"><span class="dv-tick" aria-hidden="true">${icon('check')}</span><span><b>${esc(text)}</b><small>${esc(planTitle(plan))}${!done && p.behind ? ` · ${plural(p.behind, 'day')} behind` : ''}</small></span></a>`;
+  });
+  return `<section class="card panel">
+    <a class="panel-head" href="#/devotion">${icon('book')}<h3>Devotion</h3><span class="panel-meta">${icon('chevron')}</span></a>
+    <div class="dv-lines">${lines.join('')}</div>
+  </section>`;
+}
+
+// ---- Plan picker ----
+
+function openPlanSheet() {
+  const draft = { kind: 'year', books: [], perDay: 1, start: 0 };
+  const startOptions = () => {
+    const t = startOfDay();
+    const monday = new Date(t);
+    monday.setDate(monday.getDate() + (((8 - monday.getDay()) % 7) || 7));
+    const first = new Date(t);
+    first.setMonth(first.getMonth() + 1, 1);
+    return [
+      ['Today', t],
+      ['Monday', monday.getTime()],
+      [first.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }), first.getTime()],
+    ];
+  };
+  const starts = startOptions();
+  draft.start = starts[0][1];
+  const { el, close } = openSheet(`
+    <div class="sheet-head">
+      <button class="btn btn-quiet" data-close>Cancel</button>
+      <h2>Reading plan</h2>
+      <button class="btn btn-primary" data-save>Start</button>
+    </div>
+    <div class="sheet-body">
+      <div class="dv-picks" role="radiogroup">${PLANS.map(
+        (p) => `<button class="dv-pick" role="radio" data-kind="${p.kind}"><b>${esc(p.title)}</b><span>${esc(p.blurb)}</span></button>`,
+      ).join('')}</div>
+      <div data-books hidden>
+        <div class="field-label">Old Testament</div>
+        <div class="chips dv-books">${BOOKS.filter((b) => b.testament === 'ot').map((b) => `<button class="chip" data-book="${esc(b.name)}">${esc(b.name)}</button>`).join('')}</div>
+        <div class="field-label">New Testament</div>
+        <div class="chips dv-books">${BOOKS.filter((b) => b.testament === 'nt').map((b) => `<button class="chip" data-book="${esc(b.name)}">${esc(b.name)}</button>`).join('')}</div>
+        <div class="field-label">Chapters a day</div>
+        <div class="options" role="radiogroup">${[1, 2, 3].map((n) => `<button role="radio" data-per="${n}">${n}</button>`).join('')}</div>
+      </div>
+      <div class="field-label">Start</div>
+      <div class="options" role="radiogroup">${starts.map(([label, t]) => `<button role="radio" data-start="${t}">${esc(label)}</button>`).join('')}</div>
+      <p class="muted small dv-summary" data-summary></p>
+    </div>`);
+  const plan = () => ({ kind: draft.kind, start: dayKey(draft.start), pace: defaultPace(draft.kind), ...(draft.kind === 'books' ? { books: BOOKS.map((b) => b.name).filter((n) => draft.books.includes(n)), perDay: draft.perDay } : {}) });
+  const paint = () => {
+    $$('[data-kind]', el).forEach((b) => b.setAttribute('aria-checked', String(b.dataset.kind === draft.kind)));
+    $('[data-books]', el).hidden = draft.kind !== 'books';
+    $$('[data-book]', el).forEach((b) => b.setAttribute('aria-pressed', String(draft.books.includes(b.dataset.book))));
+    $$('[data-per]', el).forEach((b) => b.setAttribute('aria-checked', String(Number(b.dataset.per) === draft.perDay)));
+    $$('[data-start]', el).forEach((b) => b.setAttribute('aria-checked', String(Number(b.dataset.start) === draft.start)));
+    const p = plan();
+    const summary = $('[data-summary]', el);
+    if (p.kind === 'books' && !p.books.length) {
+      summary.textContent = 'Choose one or more books.';
+      return;
+    }
+    const days = planDays(p).length;
+    summary.textContent = `${plural(days, p.pace === 'weekdays' ? 'weekday' : 'day')}, finishing ${longDate(dateOfDay(p, days - 1))}.`;
+  };
+  paint();
+  el.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.kind) draft.kind = b.dataset.kind;
+    else if (b.dataset.book) {
+      const n = b.dataset.book;
+      draft.books = draft.books.includes(n) ? draft.books.filter((x) => x !== n) : [...draft.books, n];
+    } else if (b.dataset.per) draft.perDay = Number(b.dataset.per);
+    else if (b.dataset.start) draft.start = Number(b.dataset.start);
+    else if (b.hasAttribute('data-save')) {
+      const p = plan();
+      if (p.kind === 'books' && !p.books.length) {
+        $('[data-summary]', el).classList.add('shake');
+        return setTimeout(() => $('[data-summary]', el)?.classList.remove('shake'), 400);
+      }
+      S.addPlan(p);
+      close();
+      return toast(`${planTitle(p)} added`, { undo: true });
+    } else return;
+    paint();
+  });
+}
+
+// ---- Journal photos ----
+
+async function addPhotos(key, files) {
+  const added = [];
+  for (const file of files) {
+    try {
+      const { blob, w, h } = await Photos.shrink(file);
+      const id = uid('ph');
+      await Photos.savePhoto(id, blob);
+      added.push({ id, at: Date.now(), w, h, text: '' });
+    } catch (err) {
+      toast(err.message || 'That photo could not be saved');
+    }
+  }
+  if (!added.length) return;
+  const entry = live(S.getData().journal[key]) ? S.getData().journal[key] : { photos: [] };
+  S.saveJournal(key, { photos: [...(entry.photos || []), ...added] });
+  if (added.length === 1) openPhotoSheet(key, added[0].id);
+  else toast(`${added.length} photos added`);
+}
+
+async function loadThumbs() {
+  for (const img of $$('img[data-photo]')) {
+    const url = await Photos.photoURL(img.dataset.photo);
+    if (url) {
+      img.src = url;
+      img.closest('.dv-thumb')?.classList.add('has-img');
+    }
+  }
+}
+
+function openPhotoSheet(key, photoId) {
+  const entryNow = () => S.getData().journal[key];
+  const photo = () => (entryNow()?.photos || []).find((ph) => ph.id === photoId);
+  if (!photo()) return;
+  const updatePhoto = (patch) => S.saveJournal(key, { photos: entryNow().photos.map((ph) => (ph.id === photoId ? { ...ph, ...patch } : ph)) });
+  const { el, close } = openSheet(`
+    <div class="sheet-head">
+      <button class="btn btn-quiet" data-close>Close</button>
+      <h2>Journal page</h2>
+      <span></span>
+    </div>
+    <div class="sheet-body">
+      <div class="dv-photo"><img data-big alt="Journal photo"><p class="muted small" data-none hidden>This photo was added on another device, so only its text is here.</p></div>
+      <div class="btn-row" data-ocr-row>
+        <button class="btn btn-primary" data-ocr>${icon('scan')} Read the text</button>
+      </div>
+      <p class="muted small" data-ocr-status></p>
+      <div data-text-box hidden>
+        <div class="field-label">Text from this page</div>
+        <textarea class="field" data-text rows="5" placeholder="The words on this page"></textarea>
+        <p class="muted small">${Photos.ocrIsNative() ? 'Read on this iPhone by Apple’s text recognition.' : 'Read in your browser. Neat handwriting works best; check and tidy it here.'} Edits save as you go.</p>
+        <div class="btn-row"><button class="btn" data-append>${icon('pen')} Add to journal</button></div>
+      </div>
+      <div class="sheet-foot"><button class="btn btn-danger" data-delete>${icon('trash')} Delete photo</button></div>
+    </div>`);
+  const text = $('[data-text]', el);
+  const box = $('[data-text-box]', el);
+  const showText = (t) => {
+    box.hidden = false;
+    text.value = t;
+    autosize(text);
+    $('[data-ocr]', el).innerHTML = `${icon('scan')} Read again`;
+    $('[data-ocr]', el).classList.remove('btn-primary');
+  };
+  if (photo().text) showText(photo().text);
+  let hasImage = false;
+  Photos.getPhoto(photoId).then((blob) => {
+    if (blob) {
+      hasImage = true;
+      Photos.photoURL(photoId).then((u) => ($('[data-big]', el).src = u));
+    } else {
+      $('[data-big]', el).hidden = true;
+      $('[data-none]', el).hidden = false;
+      $('[data-ocr-row]', el).hidden = true;
+      if (!photo().text) showText('');
+    }
+  });
+  let saveTimer;
+  text.addEventListener('input', () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => withoutRender(() => updatePhoto({ text: text.value.trim() })), 500);
+  });
+  el.addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.hasAttribute('data-ocr') && hasImage) {
+      const status = $('[data-ocr-status]', el);
+      b.disabled = true;
+      status.textContent = Photos.ocrIsNative() ? 'Reading…' : 'Reading… The first time takes a little longer while the reader downloads.';
+      try {
+        const t = await Photos.readText(await Photos.getPhoto(photoId), (n) => (status.textContent = `Reading… ${Math.round(n * 100)}%`));
+        status.textContent = t ? '' : 'No words found. Try a closer, brighter photo of the page.';
+        if (t) {
+          showText(t);
+          updatePhoto({ text: t });
+        }
+      } catch (err) {
+        status.textContent = err?.message || 'The text could not be read.';
+      }
+      b.disabled = false;
+    } else if (b.hasAttribute('data-append')) {
+      const t = text.value.trim();
+      if (!t) return;
+      const current = entryNow()?.text || '';
+      if (current.includes(t)) return toast('Already in your journal');
+      clearTimeout(saveTimer);
+      updatePhoto({ text: t });
+      S.saveJournal(key, { text: current ? `${current.trimEnd()}\n\n${t}` : t });
+      close();
+      toast('Added to your journal');
+    } else if (b.hasAttribute('data-delete')) {
+      if (!confirm('Delete this photo? Its text goes too.')) return;
+      clearTimeout(saveTimer);
+      S.saveJournal(key, { photos: entryNow().photos.filter((ph) => ph.id !== photoId) });
+      Photos.removePhoto(photoId);
+      close();
+      toast('Photo deleted');
+    }
+  });
+}
+
+// Journal typing saves without redrawing the screen, so the cursor stays put.
+let renderPaused = false;
+let renderMissed = false;
+function withoutRender(fn) {
+  renderPaused = true;
+  try {
+    fn();
+  } finally {
+    renderPaused = false;
+  }
+}
+
+let journalTimer;
+function saveJournalText(ta) {
+  clearTimeout(journalTimer);
+  withoutRender(() => S.saveJournal(ta.dataset.journal, { text: ta.value }));
+}
+
+// Backups carry journal photos too, so a new phone gets them back.
+async function photosForBackup(data) {
+  const out = {};
+  for (const entry of Object.values(data.journal || {})) {
+    for (const ph of (live(entry) && entry.photos) || []) {
+      const blob = await Photos.getPhoto(ph.id);
+      if (blob) out[ph.id] = await Photos.toDataURL(blob);
+    }
+  }
+  return out;
+}
+
+async function restorePhotos(photos = {}) {
+  for (const [id, url] of Object.entries(photos)) {
+    if (await Photos.getPhoto(id)) continue;
+    try {
+      await Photos.savePhoto(id, await Photos.fromDataURL(url));
+    } catch {
+      // skip one that won't decode
+    }
+  }
+}
+
+function devotionSection() {
+  const v = bibleVersion();
+  return `<div class="card pad reminders">
+    <p class="small">Readings open on Bible Gateway in this version.</p>
+    <div class="segmented" role="radiogroup">${VERSIONS.map((x) => `<button role="radio" aria-checked="${x === v}" data-act="bible-version" data-v="${x}">${x}</button>`).join('')}</div>
+    <p class="muted small">Journal text, ticks and text read from photos sync with your other devices, encrypted. The photos themselves stay on the device that took them, and go into backups.</p>
+  </div>`;
+}
 
 // ---------- Prayer session ----------
 
@@ -1628,6 +2073,49 @@ $('#toast').addEventListener('click', (e) => {
 // ---------- Actions ----------
 
 const ACTIONS = {
+  'plan-new': () => openPlanSheet(),
+  tick: (b) => {
+    const { plan: id } = b.dataset;
+    const day = Number(b.dataset.day);
+    const on = !isTicked(S.getData().plans[id], day, Number(b.dataset.r));
+    S.tick(id, [tickKey(day, Number(b.dataset.r))], on);
+    if (on && dayDone(S.getData().plans[id], day)) {
+      readAhead.delete(id);
+      toast(`Day ${day + 1} read`);
+    }
+  },
+  'tick-day': (b) => {
+    const { plan: id } = b.dataset;
+    const day = Number(b.dataset.day);
+    const plan = S.getData().plans[id];
+    S.tick(id, planDays(plan)[day].map((_, r) => tickKey(day, r)), !dayDone(plan, day));
+  },
+  'read-ahead': (b) => {
+    readAhead.add(b.dataset.plan);
+    render();
+  },
+  'plan-shift': (b) => {
+    const plan = S.getData().plans[b.dataset.plan];
+    const p = progress(plan);
+    S.setPlan(plan.id, { start: startFor(p.next, plan.pace) });
+    toast(`Dates moved. Day ${p.next + 1} is today`, { undo: true });
+  },
+  'plan-restart': (b) => {
+    if (!confirm('Start this plan again from today? Your ticks will be cleared.')) return;
+    const next = S.restartPlan(b.dataset.plan, dayKey());
+    location.hash = `#/plan/${next}`;
+    toast('Plan started again', { undo: true });
+  },
+  'plan-remove': (b) => {
+    S.removePlan(b.dataset.plan);
+    location.hash = '#/devotion';
+    toast('Plan removed', { undo: true });
+  },
+  'photo-open': (b) => openPhotoSheet(b.dataset.day, b.dataset.id),
+  'bible-version': (b) => {
+    S.setPrefs({ bibleVersion: b.dataset.v });
+    render();
+  },
   'quick-add': (b) => openQuickAdd({ categoryId: b.dataset.cat || (route().name === 'list' ? route().arg : '') }),
   'edit-item': (b) => openItemSheet({ id: b.dataset.id }),
   'new-cat': () => openCategorySheet(),
@@ -1778,8 +2266,39 @@ document.addEventListener('change', async (e) => {
     $('#backup-section input[name=pass]')?.focus();
   } else if (parsed && (parsed.items || parsed.categories)) {
     S.mergeIn(parsed, merge);
+    await restorePhotos(parsed.photos);
     toast('Backup imported', { undo: true });
   } else toast('That file is not a Let’s Pray backup');
+});
+
+document.addEventListener('change', (e) => {
+  const key = e.target.dataset?.photoAdd;
+  if (!key) return;
+  const files = [...e.target.files];
+  e.target.value = '';
+  if (files.length) addPhotos(key, files);
+});
+
+document.addEventListener('input', (e) => {
+  if (e.target.matches?.('[data-journal]')) {
+    clearTimeout(journalTimer);
+    journalTimer = setTimeout(() => saveJournalText(e.target), 700);
+  } else if (e.target.id === 'journal-search') {
+    journalQuery = e.target.value;
+    $('#journal-body').innerHTML = journalResults();
+  }
+});
+
+document.addEventListener('focusout', (e) => {
+  if (!e.target.matches?.('[data-journal]')) return;
+  saveJournalText(e.target);
+  // Something synced in while typing: show it once the tap that ended typing is done.
+  if (renderMissed) setTimeout(() => !document.activeElement?.matches?.('[data-journal]') && render(), 400);
+});
+
+document.addEventListener('visibilitychange', () => {
+  const ta = document.activeElement;
+  if (document.visibilityState === 'hidden' && ta?.matches?.('[data-journal]')) saveJournalText(ta);
 });
 
 document.addEventListener('change', (e) => {
@@ -1829,6 +2348,7 @@ document.addEventListener('submit', async (e) => {
       throw new Error('That passphrase doesn’t open this backup.');
     }
     S.mergeIn(data, merge);
+    await restorePhotos(data.photos);
     pendingImport = null;
     backupPanel = '';
     refreshBackup();
@@ -1938,12 +2458,18 @@ function render() {
   main.innerHTML = view(r.arg);
   main.dataset.route = location.hash;
   if (same) window.scrollTo(0, scroll);
-  const tab = { list: 'lists', tag: 'lists' }[r.name] || r.name;
+  renderMissed = false;
+  const tab = { list: 'lists', tag: 'lists', plan: 'devotion', journal: 'devotion' }[r.name] || r.name;
   $$('.nav a').forEach((a) => a.toggleAttribute('aria-current', a.dataset.tab === tab));
   const quiet = r.name === 'pray' && quietPrefs().on;
   document.body.classList.toggle('quiet', quiet);
   keepAwake(quiet);
   if (r.name === 'pray') bindSwipe();
+  if (r.name === 'devotion') {
+    $$('textarea[data-journal]').forEach(autosize);
+    loadThumbs();
+  }
+  if (r.name === 'plan' && !same) requestAnimationFrame(() => $('.dv-day.is-next')?.scrollIntoView({ block: 'center' }));
   runCardTimer();
 }
 
@@ -1964,7 +2490,10 @@ window.addEventListener('hashchange', () => {
 });
 
 S.subscribe((kind) => {
-  if (kind !== 'prefs') render();
+  if (kind === 'prefs' || renderPaused) return;
+  // Don't redraw under someone typing in the journal.
+  if (document.activeElement?.matches?.('[data-journal]')) renderMissed = true;
+  else render();
 });
 let lastStatus = '';
 Sync.onStatus((st) => {

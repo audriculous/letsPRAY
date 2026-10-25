@@ -58,7 +58,7 @@ Whenever the app’s code changes, run `npm run ios` again before building.
    - **Privacy policy URL**: `privacy.html` in this repository, published with the website (for example `https://<your-username>.github.io/letsPRAY/privacy.html`).
    - **App Privacy**: *Data Not Collected*. Prayer points stay on the device; sync goes to the user’s own GitHub account, and shared lists to their own iCloud, both encrypted. Nothing reaches the developer.
    - **Encryption**: App Store Connect asks whether the app uses encryption. Let’s Pray uses standard AES encryption from iOS to protect the user’s own data. Read Apple’s questions carefully and answer for your situation; this kind of use is usually exempt from export paperwork.
-5. Submit for review. Apple looks for apps that do more than show a website; the native reminders, follow-ups, share sheet and Siri support help here, so mention them in the review notes.
+5. Submit for review. Apple looks for apps that do more than show a website; the native reminders, follow-ups, share sheet, widgets, Siri support and on-device text recognition of journal photos help here, so mention them in the review notes. The app asks for the camera (to photograph journal pages) with the wording in `Info.plist`.
 
 ## On your Mac
 

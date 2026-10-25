@@ -29,6 +29,12 @@ A calm, tidy prayer list that runs as a web app on iPhone and Mac, keeps both in
 - **Siri and Shortcuts**: a shortcut can open Quick add with dictated text ("Hey Siri, add prayer"). Settings shows the link and the steps.
 - **Undo**: deleting, marking answered, saving an edit or adding prayers shows an *Undo* button for a few seconds (⌘Z on a Mac). In a prayer session, going back a card un-marks a mis-tapped *Prayed*. An undo also syncs, so a restored prayer comes back on your other devices.
 - **No duplicates**: Quick add spots prayers you already have, even written differently ("Sue and Ben Carter" matches "Ben & Sue Carter"). Pasted lists skip repeats unless you choose to add them; a single repeat needs a second press.
+- **Devotion**: a tab for your daily Bible reading and journal.
+  - *Reading plans*: Bible in a year, the New Testament in a year (weekdays), the Old Testament in a year, the New Testament in 90 days, the Gospels in 30 days, Psalms in a month, Proverbs in a month, or book by book (pick the books and 1 to 3 chapters a day). Run several at once.
+  - *Tick off* each reading; each one opens on Bible Gateway in the NIV (or ESV, NASB or CSB, set in Settings). Each plan shows whether you are on track or behind, with *Move my dates* to catch up without losing ticks, and *Read ahead* once today is done. Today shows the next reading too.
+  - *Journal*: a page for each day, saved as you type, showing what you read that day. Go back to earlier days, or search every entry.
+  - *Photos*: take or choose a photo of a handwritten page instead of typing. Tap it and *Read the text* (OCR) to turn it into words you can tidy and add to the journal. In the iPhone app this uses Apple's own text recognition on the device, which handles handwriting well; on the web it uses Tesseract.js in the browser (best with neat writing or print; it downloads about 10 MB once).
+  - Ticks, journal text and text read from photos sync, encrypted. Photos stay on the device that took them and are included in backups.
 - **Answered journal**: mark a prayer as answered with a note on how God answered, and look back over them later.
 - **Search** across every prayer point, note and tag, and browse by tag.
 - Light and dark mode, works offline, a short NIV verse on prayer each day.
