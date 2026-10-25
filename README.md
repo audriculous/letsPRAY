@@ -44,7 +44,7 @@ The app is plain HTML, CSS and JavaScript with no build step.
 **Put it online (GitHub Pages):**
 
 1. In the repository on GitHub, go to *Settings → Pages* and set *Source* to **GitHub Actions**.
-2. Merge to `main`. The workflow runs the tests and publishes the site at `https://<your-username>.github.io/<repo-name>/`.
+2. Push to the default branch (or press **Run workflow** under Actions). The workflow runs the tests and publishes the site at `https://<your-username>.github.io/<repo-name>/`.
 
 GitHub Pages on a private repository needs a paid GitHub plan. If the repository is private on a free plan, either make it public (prayer data is never stored in the repository, only in your private gist) or host the same files on Netlify or Cloudflare Pages.
 

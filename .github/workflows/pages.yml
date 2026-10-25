@@ -2,7 +2,6 @@ name: Test and deploy
 
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -26,7 +25,8 @@ jobs:
       - run: npm test
 
   deploy:
-    if: github.ref == 'refs/heads/main'
+    # Publish whatever the repository's default branch holds.
+    if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     needs: test
     runs-on: ubuntu-latest
     environment:
