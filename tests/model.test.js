@@ -135,3 +135,18 @@ test('weekly lists come up on their day and carry over until prayed', () => {
   d.items[sunday[0]].lastPrayedAt = mon;
   assert.equal(dayKey(nextDue(d, d.categories.cong, mon)), '2026-11-01');
 });
+
+test('duplicate titles match loosely', async () => {
+  const { titleKey, findDuplicate } = await import('../js/model.js');
+  assert.equal(titleKey('Ben & Sue Carter'), titleKey('Sue and Ben Carter'));
+  assert.equal(titleKey('The Carters'), titleKey('carters'));
+  assert.equal(titleKey('Mum’s surgery'), titleKey("mum's  surgery!"));
+  assert.equal(titleKey('Zoë Lim'), titleKey('Zoe Lim'));
+  assert.notEqual(titleKey('Ben Carter'), titleKey('Ben'));
+  const d = emptyData();
+  d.items.a = item('a', { title: 'Ben & Sue Carter' });
+  d.items.b = item('b', { title: 'Old prayer', answeredAt: 5 });
+  assert.equal(findDuplicate(d, 'Sue and Ben Carter').id, 'a');
+  assert.equal(findDuplicate(d, 'Sue and Ben Carter', 'a'), null);
+  assert.equal(findDuplicate(d, 'Old prayer'), null); // answered ones can be prayed for again
+});

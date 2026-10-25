@@ -14,6 +14,7 @@ function read(key, fallback) {
 }
 
 function write(key, value) {
+  if (typeof localStorage === 'undefined') return;
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (err) {
@@ -57,82 +58,164 @@ function commit() {
 
 const now = () => Date.now();
 
+// ---- Undo ----
+// The last change can be reversed. Before a change touches a record we keep
+// its previous version; undo puts those back with a fresh timestamp, so the
+// restored version also wins on every synced device.
+
+let change = null; // the change being recorded
+let lastChange = null; // the change that undo would reverse
+let depth = 0;
+
+const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+
+function remember(kind, id) {
+  if (change && !(id in change[kind])) change[kind][id] = copy(data[kind][id]);
+}
+
+// Groups everything `fn` does into one undoable change.
+export function batch(label, fn, meta = {}) {
+  const outer = depth === 0;
+  if (outer) change = { label, meta, items: {}, categories: {}, days: {} };
+  depth += 1;
+  try {
+    return fn();
+  } finally {
+    depth -= 1;
+    if (outer) {
+      const touched = Object.keys(change.items).length + Object.keys(change.categories).length;
+      if (touched) lastChange = change;
+      change = null;
+    }
+  }
+}
+
+export const lastUndo = () => lastChange;
+
+export function undo() {
+  const c = lastChange;
+  if (!c) return null;
+  lastChange = null;
+  const t = now();
+  for (const kind of ['categories', 'items']) {
+    for (const [id, prev] of Object.entries(c[kind])) {
+      data[kind][id] = prev === undefined ? { id, deleted: true, updatedAt: t } : { ...prev, updatedAt: t };
+    }
+  }
+  for (const [key, prev] of Object.entries(c.days)) {
+    if (prev === undefined) delete data.days[key];
+    else data.days[key] = prev;
+  }
+  commit();
+  return c;
+}
+
 // ---- Categories ----
 
 export function saveCategory(fields) {
-  const id = fields.id || uid('cat');
-  const prev = data.categories[id];
-  const order = prev ? prev.order : activeCategories(data).length;
-  data.categories[id] = { perSession: 2, ...prev, ...fields, id, order, updatedAt: now() };
-  commit();
-  return id;
+  return batch('List saved', () => {
+    const id = fields.id || uid('cat');
+    const prev = data.categories[id];
+    remember('categories', id);
+    const order = prev && !prev.deleted ? prev.order : activeCategories(data).length;
+    data.categories[id] = { perSession: 2, ...prev, ...fields, id, order, updatedAt: now() };
+    commit();
+    return id;
+  });
 }
 
 export function deleteCategory(id) {
-  // Points in the category go with it, as tombstones.
-  for (const item of Object.values(data.items)) {
-    if (item.categoryId === id && !item.deleted) data.items[item.id] = { id: item.id, deleted: true, updatedAt: now() };
-  }
-  data.categories[id] = { id, deleted: true, updatedAt: now() };
-  commit();
+  return batch('List deleted', () => {
+    // Points in the category go with it, as tombstones.
+    for (const item of Object.values(data.items)) {
+      if (item.categoryId === id && !item.deleted) {
+        remember('items', item.id);
+        data.items[item.id] = { id: item.id, deleted: true, updatedAt: now() };
+      }
+    }
+    remember('categories', id);
+    data.categories[id] = { id, deleted: true, updatedAt: now() };
+    commit();
+  });
 }
 
 export function reorderCategories(ids) {
-  ids.forEach((id, order) => {
-    const cat = data.categories[id];
-    if (cat && cat.order !== order) data.categories[id] = { ...cat, order, updatedAt: now() };
+  return batch('Lists reordered', () => {
+    ids.forEach((id, order) => {
+      const cat = data.categories[id];
+      if (cat && cat.order !== order) {
+        remember('categories', id);
+        data.categories[id] = { ...cat, order, updatedAt: now() };
+      }
+    });
+    commit();
   });
-  commit();
 }
 
 // ---- Prayer points ----
 
 export function saveItem(fields) {
-  const id = fields.id || uid('pt');
-  const prev = data.items[id];
-  data.items[id] = {
-    tags: [],
-    notes: '',
-    createdAt: now(),
-    lastPrayedAt: 0,
-    prayedCount: 0,
-    answeredAt: 0,
-    answerNote: '',
-    archived: false,
-    ...prev,
-    ...fields,
-    id,
-    updatedAt: now(),
-  };
-  commit();
-  return id;
+  return batch(fields.id ? 'Saved' : 'Added', () => {
+    const id = fields.id || uid('pt');
+    const prev = data.items[id];
+    remember('items', id);
+    data.items[id] = {
+      tags: [],
+      notes: '',
+      createdAt: now(),
+      lastPrayedAt: 0,
+      prayedCount: 0,
+      answeredAt: 0,
+      answerNote: '',
+      archived: false,
+      ...prev,
+      ...fields,
+      id,
+      updatedAt: now(),
+    };
+    commit();
+    return id;
+  });
 }
 
 export function deleteItem(id) {
-  data.items[id] = { id, deleted: true, updatedAt: now() };
-  commit();
+  return batch('Deleted', () => {
+    remember('items', id);
+    data.items[id] = { id, deleted: true, updatedAt: now() };
+    commit();
+  });
 }
 
 export function markPrayed(id) {
-  const item = data.items[id];
-  if (!item) return;
-  const t = now();
-  data.items[id] = { ...item, lastPrayedAt: t, prayedCount: (item.prayedCount || 0) + 1, updatedAt: t };
-  const key = dayKey(t);
-  data.days[key] = (data.days[key] === true ? 1 : Number(data.days[key]) || 0) + 1;
-  commit();
+  return batch('Prayed', () => {
+    const item = data.items[id];
+    if (!item) return;
+    const t = now();
+    const key = dayKey(t);
+    remember('items', id);
+    if (change && !(key in change.days)) change.days[key] = data.days[key];
+    data.items[id] = { ...item, lastPrayedAt: t, prayedCount: (item.prayedCount || 0) + 1, updatedAt: t };
+    data.days[key] = (data.days[key] === true ? 1 : Number(data.days[key]) || 0) + 1;
+    commit();
+  }, { itemId: id });
 }
 
 export function markAnswered(id, answerNote = '') {
-  const item = data.items[id];
-  if (!item) return;
-  data.items[id] = { ...item, answeredAt: now(), answerNote, updatedAt: now() };
-  commit();
+  return batch('Marked answered', () => {
+    const item = data.items[id];
+    if (!item) return;
+    remember('items', id);
+    data.items[id] = { ...item, answeredAt: now(), answerNote, updatedAt: now() };
+    commit();
+  });
 }
 
 export function unmarkAnswered(id) {
-  const item = data.items[id];
-  if (!item) return;
-  data.items[id] = { ...item, answeredAt: 0, answerNote: '', updatedAt: now() };
-  commit();
+  return batch('Moved back to praying', () => {
+    const item = data.items[id];
+    if (!item) return;
+    remember('items', id);
+    data.items[id] = { ...item, answeredAt: 0, answerNote: '', updatedAt: now() };
+    commit();
+  });
 }

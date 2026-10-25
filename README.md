@@ -18,6 +18,8 @@ A calm, tidy prayer list that runs as a web app on iPhone and Mac and keeps both
 - **Tags** on every prayer point, with two kinds of suggestion while you type:
   - *Suggested*: based on what the prayer is about. Theme words (surgery → Health, exams → Study, missionary → Missionaries and so on), names in the text, existing tags mentioned in the text, and words you have tagged before (it learns from your own tagging).
   - *Frequent*: the tags you use most, weighted towards the list you are in.
+- **Undo**: deleting, marking answered, saving an edit or adding prayers shows an *Undo* button for a few seconds (⌘Z on a Mac). In a prayer session, going back a card un-marks a mis-tapped *Prayed*. An undo also syncs, so a restored prayer comes back on your other devices.
+- **No duplicates**: Quick add spots prayers you already have, even written differently ("Sue and Ben Carter" matches "Ben & Sue Carter"). Pasted lists skip repeats unless you choose to add them; a single repeat needs a second press.
 - **Answered journal**: mark a prayer as answered with a note on how God answered, and look back over them later.
 - **Search** across every prayer point, note and tag, and browse by tag.
 - Light and dark mode, works offline, a short NIV verse on prayer each day.

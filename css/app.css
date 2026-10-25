@@ -628,6 +628,22 @@ body.praying .view { max-width: 620px; padding-bottom: calc(var(--safe-b) + 24px
   pointer-events: none;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast { display: flex; align-items: center; gap: 14px; white-space: nowrap; max-width: calc(100vw - 32px); }
+.toast span { overflow: hidden; text-overflow: ellipsis; }
+.toast.has-undo { padding: 8px 8px 8px 20px; }
+.toast.has-undo.show { pointer-events: auto; }
+.toast button { height: 36px; padding: 0 14px; border-radius: 12px; background: var(--accent); color: var(--accent-ink); font: italic 800 17px var(--display); text-transform: uppercase; flex: none; }
+
+/* ---------- Duplicates ---------- */
+
+.dup-note { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 12px 14px; margin-bottom: 12px; border-radius: 14px; background: var(--accent-soft); color: var(--ink); font-size: 15px; font-weight: 500; }
+.dup-note > .ic { width: 18px; height: 18px; color: var(--accent-text); }
+.dup-note span { flex: 1; min-width: 160px; }
+.dup-note .link-btn { margin: 0; }
+.quick-card .dup-note { margin: -4px 0 14px; }
+.quick-many .is-dup .row-title { text-decoration: line-through; color: var(--ink-3); }
+.quick-many .is-dup .row-dot { opacity: 0.35; }
+.dup-tag { font-size: 13px; font-weight: 600; color: var(--accent-text); margin-right: 4px; }
 @media (min-width: 860px) { .toast { bottom: 36px; left: calc(50% + 118px); } }
 
 @media (prefers-reduced-motion: reduce) {

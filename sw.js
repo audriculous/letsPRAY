@@ -1,5 +1,5 @@
 // Offline app shell. Bump VERSION whenever files change so devices update.
-const VERSION = 'letspray-v5';
+const VERSION = 'letspray-v6';
 const SHELL = [
   './',
   './index.html',

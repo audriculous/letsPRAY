@@ -216,3 +216,32 @@ export function weekStats(data, now = Date.now()) {
   const answered = Object.values(data.items).filter((i) => live(i) && i.answeredAt >= since).length;
   return { daysPrayed, prayers, answered, from: now - 6 * DAY, to: now };
 }
+
+// ---- Duplicates ----
+
+const KEY_SKIP = new Set(['and', 'the', 'mr', 'mrs', 'ms', 'miss', 'dr', 'rev', 'family', 'pray', 'for']);
+
+// A loose version of a title for spotting duplicates: case, punctuation,
+// word order and small words don't matter, so "Ben & Sue Carter" matches
+// "Sue and Ben Carter" and "the Carters" matches "Carters".
+export function titleKey(title) {
+  return (title || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[’']s\b/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .split(' ')
+    .filter((w) => w && !KEY_SKIP.has(w))
+    .sort()
+    .join(' ');
+}
+
+// A prayer point still being prayed for with the same title, if any.
+export function findDuplicate(data, title, exceptId = '') {
+  const key = titleKey(title);
+  if (!key) return null;
+  return (
+    Object.values(data.items).find((i) => live(i) && !i.answeredAt && i.id !== exceptId && titleKey(i.title) === key) || null
+  );
+}

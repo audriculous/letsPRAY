@@ -1,6 +1,6 @@
 import * as S from './store.js';
 import * as Sync from './sync.js';
-import { activeCategories, itemsIn, answeredItems, buildSession, streak, weekStats, allTags, live, dayKey, startOfDay, merge, listDue, nextDue, WEEKDAY_NAMES, COLOURS } from './model.js';
+import { activeCategories, itemsIn, answeredItems, buildSession, streak, weekStats, allTags, live, dayKey, startOfDay, merge, listDue, nextDue, findDuplicate, titleKey, WEEKDAY_NAMES, COLOURS } from './model.js';
 import { parseMany } from './parse.js';
 import { MIN_PASSPHRASE, normalisePassphrase } from './crypto.js';
 import { suggestTags } from './tags.js';
@@ -514,6 +514,20 @@ function prayAdvance(prayedId) {
   } else render();
 }
 
+// Going back to the previous card also un-marks it if Prayed was the last
+// thing done, so a mis-tap is easy to fix.
+function prayBack() {
+  if (!session || session.index === 0) return;
+  session.index -= 1;
+  const prev = session.cards[session.index];
+  const last = S.lastUndo();
+  if (last?.label === 'Prayed' && last.meta.itemId === prev?.itemId) {
+    session.prayed -= 1;
+    S.undo(); // triggers a render
+    toast('Prayed un-marked');
+  } else render();
+}
+
 function bindSwipe() {
   const card = $('#pray-card');
   if (!card) return;
@@ -539,8 +553,7 @@ function bindSwipe() {
       card.classList.add('fly-left');
       setTimeout(() => prayAdvance($('[data-act="pray-done"]')?.dataset.id), 160);
     } else if (dx > 90 && session.index > 0) {
-      session.index -= 1;
-      render();
+      prayBack();
     } else {
       card.style.transform = '';
       card.style.opacity = '';
@@ -725,9 +738,11 @@ function openItemSheet({ id, categoryId, prefill } = {}) {
       setTimeout(() => title.classList.remove('shake'), 400);
       return;
     }
+    const dup = !existing && findDuplicate(S.getData(), t);
+    if (dup && !confirm(`“${dup.title}” is already in ${S.getData().categories[dup.categoryId]?.name || 'your lists'}. Add it again?`)) return;
     S.saveItem({ ...draft, title: t, notes: notes.value.trim(), eventAt: fromDateInput($('[name=date]', el).value) });
     close();
-    toast(existing ? 'Saved' : 'Prayer point added');
+    toast(existing ? 'Saved' : 'Prayer point added', { undo: true });
   };
 
   el.addEventListener('click', (e) => {
@@ -747,18 +762,16 @@ function openItemSheet({ id, categoryId, prefill } = {}) {
     } else if ('save' in b.dataset) {
       save();
     } else if ('delete' in b.dataset) {
-      if (confirm(`Delete “${existing.title}”?`)) {
-        S.deleteItem(existing.id);
-        close();
-        toast('Deleted');
-      }
+      S.deleteItem(existing.id);
+      close();
+      toast('Deleted', { undo: true });
     } else if ('answer' in b.dataset) {
       close();
       openAnswerSheet(existing.id);
     } else if ('unanswer' in b.dataset) {
       S.unmarkAnswered(existing.id);
       close();
-      toast('Back on your list');
+      toast('Back on your list', { undo: true });
     }
   });
   el.addEventListener('keydown', (e) => {
@@ -787,7 +800,7 @@ function openAnswerSheet(id, { onDone } = {}) {
   $('[data-save]', el).addEventListener('click', () => {
     S.markAnswered(id, note.value.trim());
     close();
-    toast('Praise God!');
+    toast('Praise God!', { undo: true });
     onDone?.();
   });
 }
@@ -871,6 +884,7 @@ function openCategorySheet(id) {
       if (confirm(`Delete “${existing.name}”${count ? ` and its ${plural(count, 'prayer point')}` : ''}?`)) {
         S.deleteCategory(id);
         close();
+        toast('List deleted', { undo: true });
         location.hash = '#/lists';
       }
     }
@@ -888,7 +902,10 @@ const QUICK_HINTS = [
 
 function openQuickAdd({ categoryId = '' } = {}) {
   let added = 0;
+  let addedIds = [];
   let parsed = [];
+  let includeDups = false; // add repeats in a pasted list anyway
+  let confirmDup = false; // a single repeat needs a second press
   // Changes made by hand, which further typing must not undo.
   let pickedList = '';
   let droppedDate = false;
@@ -899,7 +916,31 @@ function openQuickAdd({ categoryId = '' } = {}) {
     droppedDate = false;
     droppedTags = new Set();
     extraTags = [];
+    includeDups = false;
+    confirmDup = false;
   };
+
+  // Marks prayers already on a list, or repeated earlier in what was pasted.
+  const markDuplicates = (list) => {
+    const data = S.getData();
+    const seen = new Set();
+    for (const p of list) {
+      const key = titleKey(p.title);
+      p.dup = findDuplicate(data, p.title);
+      p.repeat = !p.dup && seen.has(key);
+      seen.add(key);
+    }
+    return list;
+  };
+  const isDup = (p) => p.dup || p.repeat;
+  const dupWhere = (p) => (p.dup ? `Already in ${S.getData().categories[p.dup.categoryId]?.name || 'a list'}` : 'Repeated above');
+
+  const heading = () => {
+    const data = S.getData();
+    const n = addedIds.filter((id) => live(data.items[id])).length;
+    $('[data-heading]', el).textContent = n ? `${n} added` : 'Quick add';
+  };
+  const stopWatching = S.subscribe(() => heading());
 
   const { el, close } = openSheet(`
     <div class="sheet-head">
@@ -911,7 +952,7 @@ function openQuickAdd({ categoryId = '' } = {}) {
       <textarea class="field field-quick" name="q" rows="2" placeholder="Type a prayer in your own words…" autocomplete="off" enterkeyhint="done"></textarea>
       <p class="quick-hint">${icon('sparkle')}<span data-hint>${QUICK_HINTS[Math.floor(Math.random() * QUICK_HINTS.length)]}</span></p>
       <div data-preview></div>
-    </div>`);
+    </div>`, { onClose: () => stopWatching() });
 
   const input = $('[name=q]', el);
   autosize(input);
@@ -925,8 +966,12 @@ function openQuickAdd({ categoryId = '' } = {}) {
   };
 
   const render = () => {
-    parsed = parseMany(input.value, S.getData(), { categoryId });
-    $('[data-add]', el).disabled = !parsed.length;
+    parsed = markDuplicates(parseMany(input.value, S.getData(), { categoryId }));
+    const dups = parsed.filter(isDup).length;
+    const toAdd = parsed.length > 1 && !includeDups ? parsed.length - dups : parsed.length;
+    const addBtn = $('[data-add]', el);
+    addBtn.disabled = !toAdd;
+    addBtn.textContent = parsed.length > 1 ? `Add ${toAdd}` : parsed.length && dups ? 'Add anyway' : 'Add';
     $('[data-hint]', el).textContent = parsed.length
       ? parsed.length > 1
         ? `${parsed.length} prayer points, one per line`
@@ -937,13 +982,19 @@ function openQuickAdd({ categoryId = '' } = {}) {
     if (!parsed.length) return (box.innerHTML = '');
 
     if (parsed.length > 1) {
-      box.innerHTML = `<div class="card list quick-many">${parsed
+      box.innerHTML = `${
+        dups
+          ? `<div class="dup-note">${icon('list')}<span>${plural(dups, 'repeat')} ${includeDups ? 'will be added again' : 'will be skipped'}.</span>
+            <button class="link-btn" data-include-dups>${includeDups ? 'Skip them' : 'Add them anyway'}</button></div>`
+          : ''
+      }<div class="card list quick-many">${parsed
         .map((p) => {
           const cat = data.categories[p.categoryId];
-          return `<div class="row row-static" style="${catColour(cat)}">
+          const skipped = isDup(p) && !includeDups;
+          return `<div class="row row-static${skipped ? ' is-dup' : ''}" style="${catColour(cat)}">
             <span class="row-dot"></span>
             <span class="row-body"><span class="row-title">${esc(p.title)}</span>
-            <span class="row-meta"><span class="meta-cat">${esc(cat?.name || '')}</span>${p.date ? dateChip(p.date) : ''}${tagChips(p.tags)}</span></span>
+            <span class="row-meta">${isDup(p) ? `<span class="dup-tag">${esc(dupWhere(p))}</span>` : ''}<span class="meta-cat">${esc(cat?.name || '')}</span>${p.date ? dateChip(p.date) : ''}${tagChips(p.tags)}</span></span>
           </div>`;
         })
         .join('')}</div>`;
@@ -955,6 +1006,12 @@ function openQuickAdd({ categoryId = '' } = {}) {
     const why = pickedList ? '' : p.explicitList ? 'Chosen with @' : categoryId && p.categoryId === categoryId ? 'The list you’re in' : p.why ? `Picked because it ${p.why}` : '';
     const offered = p.suggestions.filter((t) => !p.tags.some((x) => x.toLowerCase() === t.toLowerCase())).slice(0, 4);
     box.innerHTML = `<div class="card quick-card" style="${catColour(cat)}">
+      ${
+        p.dup
+          ? `<div class="dup-note${confirmDup ? ' shake' : ''}">${icon('list')}<span>${esc(dupWhere(p))}${p.dup.title !== p.title ? `: “${esc(p.dup.title)}”` : ''}</span>
+            <button class="link-btn" data-open-dup="${p.dup.id}">Open it</button></div>`
+          : ''
+      }
       <div class="q-title">${esc(p.title)}</div>
       ${p.notes ? `<div class="q-notes">${esc(p.notes)}</div>` : ''}
       <div class="q-label">List${why ? ` <span>${icon('sparkle')}${esc(why)}</span>` : ''}</div>
@@ -978,12 +1035,26 @@ function openQuickAdd({ categoryId = '' } = {}) {
 
   const add = () => {
     if (!parsed.length) return;
+    // A single repeat: the first press points it out, the second adds it.
+    if (parsed.length === 1 && parsed[0].dup && !confirmDup) {
+      confirmDup = true;
+      return render();
+    }
     const data = S.getData();
-    const items = parsed.map(finalise);
-    for (const p of items) S.saveItem({ title: p.title, notes: p.notes, categoryId: p.categoryId, tags: p.tags, eventAt: p.date || 0 });
+    const items = parsed.map(finalise).filter((p) => parsed.length === 1 || includeDups || !isDup(p));
+    const skipped = parsed.length - items.length;
+    if (!items.length) return;
+    S.batch(items.length > 1 ? `Added ${items.length}` : 'Added', () => {
+      for (const p of items) addedIds.push(S.saveItem({ title: p.title, notes: p.notes, categoryId: p.categoryId, tags: p.tags, eventAt: p.date || 0 }));
+    });
     added += items.length;
-    toast(items.length > 1 ? `Added ${items.length} prayer points` : `Added to ${data.categories[items[0].categoryId]?.name || 'your list'}`);
-    $('[data-heading]', el).textContent = `${added} added`;
+    toast(
+      items.length > 1
+        ? `Added ${items.length} prayer points${skipped ? ` · skipped ${skipped} already there` : ''}`
+        : `Added to ${data.categories[items[0].categoryId]?.name || 'your list'}`,
+      { undo: true },
+    );
+    heading();
     input.value = '';
     input.dispatchEvent(new Event('input'));
     reset();
@@ -993,6 +1064,7 @@ function openQuickAdd({ categoryId = '' } = {}) {
 
   let timer;
   input.addEventListener('input', () => {
+    confirmDup = false;
     if (!input.value.trim()) reset();
     clearTimeout(timer);
     timer = setTimeout(render, 60);
@@ -1009,7 +1081,12 @@ function openQuickAdd({ categoryId = '' } = {}) {
     const b = e.target.closest('button');
     if (!b) return;
     if ('add' in b.dataset) return add();
-    if (b.dataset.pick) pickedList = b.dataset.pick;
+    if ('includeDups' in b.dataset) includeDups = !includeDups;
+    else if (b.dataset.openDup) {
+      close();
+      openItemSheet({ id: b.dataset.openDup });
+      return;
+    } else if (b.dataset.pick) pickedList = b.dataset.pick;
     else if ('dropDate' in b.dataset) droppedDate = true;
     else if (b.dataset.dropTag) {
       const key = b.dataset.dropTag.toLowerCase();
@@ -1031,13 +1108,23 @@ function openQuickAdd({ categoryId = '' } = {}) {
 // ---------- Toast ----------
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, { undo = false } = {}) {
   const t = $('#toast');
-  t.textContent = msg;
+  t.innerHTML = `<span>${esc(msg)}</span>${undo ? '<button type="button" data-undo>Undo</button>' : ''}`;
+  t.classList.toggle('has-undo', undo);
   t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
+  toastTimer = setTimeout(() => t.classList.remove('show'), undo ? 6000 : 1800);
 }
+
+function doUndo() {
+  const c = S.undo();
+  if (c) toast(`Undone: ${c.label.toLowerCase()}`);
+}
+
+$('#toast').addEventListener('click', (e) => {
+  if (e.target.closest('[data-undo]')) doUndo();
+});
 
 // ---------- Actions ----------
 
@@ -1054,10 +1141,7 @@ const ACTIONS = {
   'focus-search': () => setTimeout(() => $('#search')?.focus(), 50),
   'pray-done': (b) => prayAdvance(b.dataset.id),
   'pray-skip': () => prayAdvance(),
-  'pray-back': () => {
-    session.index = Math.max(0, session.index - 1);
-    render();
-  },
+  'pray-back': () => prayBack(),
   'pray-answered': (b) => openAnswerSheet(b.dataset.id),
   'pray-close': () => {
     session = null;
@@ -1181,6 +1265,12 @@ document.addEventListener('input', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (document.querySelector('.sheet-root') || /INPUT|TEXTAREA/.test(document.activeElement?.tagName)) return;
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && S.lastUndo()) {
+    e.preventDefault();
+    if (route().name === 'pray' && session && S.lastUndo().label === 'Prayed') prayBack();
+    else doUndo();
+    return;
+  }
   const r = route();
   if (r.name === 'pray' && session) {
     if (e.key === 'ArrowRight' || e.key === 'Enter' || e.key === ' ') {
