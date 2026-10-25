@@ -708,3 +708,30 @@ body.praying .view { max-width: 620px; padding-bottom: calc(var(--safe-b) + 24px
 [data-new-pass][hidden] { display: none; }
 .small-link { font-size: 14px; margin-top: 2px; justify-self: start; color: var(--ink-2); }
 #backup-section .dup-note { margin: 14px 0 0; }
+
+/* ---------- Quiet mode ---------- */
+
+.quiet-btn[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent-text); }
+.quiet-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -6px 0 14px; }
+.quiet-bar > span { display: inline-flex; align-items: center; gap: 6px; margin-right: 4px; font-size: 14px; font-weight: 600; color: var(--ink-2); }
+.quiet-bar .ic { width: 16px; height: 16px; }
+.quiet-bar .chip { height: 32px; padding: 0 11px; font-size: 14px; }
+.quiet-bar { flex-wrap: nowrap; overflow-x: auto; }
+body.praying .toast { bottom: auto; top: calc(var(--safe-t) + 14px); }
+.quiet-bar .chip[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); font-weight: 600; }
+body.quiet { background: color-mix(in srgb, var(--bg) 82%, var(--ink) 6%); }
+body.quiet .pray-card { box-shadow: none; }
+body.quiet .pray-card .chips,
+body.quiet .pray-meta:not(.pray-date),
+body.quiet .pray-hint,
+body.quiet .pray-top .small,
+body.quiet [data-act='pray-answered'],
+body.quiet [data-act='pray-skip'] { display: none; }
+body.quiet .pray-title { font-size: clamp(38px, 10vw, 52px); }
+body.quiet .pray-actions { grid-template-columns: auto 1fr; }
+.pray-timer { height: 5px; margin-top: auto; border-radius: 5px; background: var(--surface-2); overflow: hidden; }
+.pray-timer span { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 5px; animation: card-timer linear forwards; }
+@keyframes card-timer { to { width: 100%; } }
+.pray-amen.timer-done { animation: amen-ready 1.8s ease-in-out infinite; }
+@keyframes amen-ready { 50% { box-shadow: 0 0 0 8px var(--accent-soft); } }
+@media (prefers-reduced-motion: reduce) { .pray-timer span { animation: none; width: 100%; opacity: 0.5; } }

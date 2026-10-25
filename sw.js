@@ -1,5 +1,5 @@
 // Offline app shell. Bump VERSION whenever files change so devices update.
-const VERSION = 'letspray-v7';
+const VERSION = 'letspray-v8';
 const SHELL = [
   './',
   './index.html',
@@ -16,6 +16,7 @@ const SHELL = [
   './js/crypto.js',
   './js/keystore.js',
   './js/notify.js',
+  './js/widget.js',
   './icons/icon.svg',
   './icons/icon-192.png',
   './icons/apple-touch-icon.png',

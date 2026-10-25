@@ -5,6 +5,7 @@ import { parseMany } from './parse.js';
 import { MIN_PASSPHRASE, normalisePassphrase, ITERATIONS, newSalt, deriveKey, seal, unseal, envelopeKey, isEnvelope } from './crypto.js';
 import { loadKey } from './keystore.js';
 import * as Notify from './notify.js';
+import * as Widget from './widget.js';
 import { suggestTags } from './tags.js';
 import { icon, CATEGORY_ICONS } from './icons.js';
 import { verseFor } from './verses.js';
@@ -477,6 +478,31 @@ async function updateReminder(patch) {
   refreshReminders();
 }
 
+// ---------- Widgets ----------
+
+const widgetNames = () => S.getPrefs().widgetNames !== false;
+
+let widgetTimer;
+function publishWidget() {
+  if (!Widget.hasWidgets()) return;
+  clearTimeout(widgetTimer);
+  widgetTimer = setTimeout(() => Widget.publish(S.getData(), { showNames: widgetNames() }).catch(() => {}), 800);
+}
+
+function widgetSection() {
+  const how = `<ol class="steps">
+      <li><b>iPhone:</b> touch and hold the Home Screen, tap <b>Edit</b>, then <b>Add Widget</b>, and choose Let’s Pray.</li>
+      <li><b>Mac</b> (macOS Sonoma or later, signed in to the same Apple Account): right-click the desktop, choose <b>Edit Widgets</b>, and pick Let’s Pray under <b>From iPhone</b>. The large size is made for the desktop.</li>
+    </ol>`;
+  if (!Widget.hasWidgets()) {
+    return `<div class="card pad"><p class="small">Widgets come with the App Store app: today’s prayers on your iPhone Home Screen and Lock Screen, and on your Mac desktop straight from your iPhone.</p>${how}</div>`;
+  }
+  return `<div class="card pad reminders">
+    <label class="switch-row"><span><b>Show names in widgets</b><small>Home Screen and Mac desktop widgets show who’s up next. Lock Screen widgets only ever show counts.</small></span><input type="checkbox" class="switch" id="widget-names" data-widget-names ${widgetNames() ? 'checked' : ''}></label>
+    ${how}
+  </div>`;
+}
+
 // ---------- Siri & Shortcuts ----------
 
 const shortcutLink = (save = false) =>
@@ -608,6 +634,9 @@ VIEWS.settings = () => {
   <h3 class="section-title">Reminders</h3>
   <div id="reminders-section">${remindersSection()}</div>
 
+  <h3 class="section-title">Widgets</h3>
+  ${widgetSection()}
+
   <h3 class="section-title">Siri & Shortcuts</h3>
   ${shortcutSection()}
 
@@ -654,6 +683,92 @@ VIEWS.settings = () => {
 
 let session = null;
 
+// Quiet mode: less on the screen, the screen kept awake, and an optional
+// gentle timer on each card that chimes when the time is up.
+const quietPrefs = () => ({ on: false, minutes: 0, ...S.getPrefs().quiet });
+let wakeLock = null;
+let audio = null;
+let cardTimer = null;
+let timerFor = ''; // which card the running timer belongs to
+let timerStart = 0;
+
+async function keepAwake(on) {
+  try {
+    if (on && !wakeLock && 'wakeLock' in navigator && document.visibilityState === 'visible') {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => {
+        wakeLock = null;
+      });
+    } else if (!on && wakeLock) {
+      await wakeLock.release();
+      wakeLock = null;
+    }
+  } catch {
+    wakeLock = null; // not available here; the screen may dim as usual
+  }
+}
+
+// Browsers only allow sound after a tap, so this runs from one.
+function unlockAudio() {
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    audio.resume();
+  } catch {
+    audio = null;
+  }
+}
+
+function chime() {
+  if (!audio) return;
+  const t = audio.currentTime;
+  [[528, 0], [660, 0.22]].forEach(([freq, delay]) => {
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t + delay);
+    gain.gain.exponentialRampToValueAtTime(0.16, t + delay + 0.04);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + delay + 1.8);
+    osc.connect(gain).connect(audio.destination);
+    osc.start(t + delay);
+    osc.stop(t + delay + 1.9);
+  });
+}
+
+// Starts (or carries on) the timer for the card on screen.
+function runCardTimer() {
+  const q = quietPrefs();
+  const card = $('#pray-card');
+  const key = card && session ? `${session.index}:${$('[data-act="pray-done"]')?.dataset.id}` : '';
+  if (!q.on || !q.minutes || !card) {
+    clearTimeout(cardTimer);
+    timerFor = '';
+    return;
+  }
+  const total = q.minutes * 60000;
+  if (key !== timerFor) {
+    timerFor = key;
+    timerStart = Date.now();
+  }
+  const elapsed = Date.now() - timerStart;
+  const bar = $('.pray-timer span');
+  if (bar) {
+    bar.style.animationDuration = `${total}ms`;
+    bar.style.animationDelay = `-${Math.min(elapsed, total)}ms`;
+  }
+  clearTimeout(cardTimer);
+  const done = () => {
+    $('.pray-amen')?.classList.add('timer-done');
+    $('.pray-timer')?.classList.add('done');
+  };
+  if (elapsed >= total) done();
+  else
+    cardTimer = setTimeout(() => {
+      chime();
+      done();
+    }, total - elapsed);
+}
+
 function startSession() {
   session = { cards: buildSession(S.getData(), sessionSize()[2]), index: 0, prayed: 0 };
 }
@@ -694,7 +809,15 @@ VIEWS.pray = () => {
       ${close}
       <div class="progress" aria-label="${index + 1} of ${cards.length}"><span style="width:${((index + 1) / cards.length) * 100}%"></span></div>
       <span class="muted small">${index + 1} / ${cards.length}</span>
+      <button class="icon-btn quiet-btn" data-act="quiet-toggle" aria-pressed="${quietPrefs().on}" aria-label="Quiet mode" title="Quiet mode">${icon('moon')}</button>
     </div>
+    ${
+      quietPrefs().on
+        ? `<div class="quiet-bar" role="radiogroup" aria-label="Timer for each card"><span title="Timer for each card">${icon('clock')}</span>${[0, 1, 2, 3, 5]
+            .map((m) => `<button class="chip" data-act="quiet-timer" data-min="${m}" aria-pressed="${quietPrefs().minutes === m}">${m ? `${m} min` : 'Off'}</button>`)
+            .join('')}</div>`
+        : ''
+    }
     <article class="pray-card" id="pray-card">
       <div class="eyebrow pray-cat">${icon(cat?.icon || 'star')}${esc(cat?.name || '')}</div>
       <h2 class="pray-title">${esc(item.title)}</h2>
@@ -706,6 +829,7 @@ VIEWS.pray = () => {
       ${(item.tags || []).length || isPinned(item) ? `<div class="chips">${pinChip(item)}${tagChips(item.tags)}</div>` : ''}
       ${item.eventAt ? `<div class="pray-meta pray-date">${icon('today')} ${esc(dateLabel(item.eventAt, true))}</div>` : ''}
       <div class="pray-meta">${icon('clock')} ${esc(ago(item.lastPrayedAt))}${item.prayedCount ? ` · ${plural(item.prayedCount, 'time')} so far` : ''}</div>
+      ${quietPrefs().on && quietPrefs().minutes ? '<div class="pray-timer" aria-hidden="true"><span></span></div>' : ''}
     </article>
     <div class="pray-actions">
       <button class="btn btn-quiet" data-act="pray-back" ${index === 0 ? 'disabled' : ''} aria-label="Previous">${icon('back')}</button>
@@ -1447,7 +1571,23 @@ const ACTIONS = {
   'edit-item': (b) => openItemSheet({ id: b.dataset.id }),
   'new-cat': () => openCategorySheet(),
   'edit-cat': (b) => openCategorySheet(b.dataset.id),
-  begin: () => startSession(),
+  begin: () => {
+    unlockAudio();
+    startSession();
+  },
+  'quiet-toggle': () => {
+    unlockAudio();
+    const q = quietPrefs();
+    S.setPrefs({ quiet: { ...q, on: !q.on } });
+    toast(q.on ? 'Quiet mode off' : 'Quiet mode on. The screen stays awake.');
+    render();
+  },
+  'quiet-timer': (b) => {
+    unlockAudio();
+    timerFor = '';
+    S.setPrefs({ quiet: { ...quietPrefs(), minutes: Number(b.dataset.min) } });
+    render();
+  },
   size: (b) => {
     S.setPrefs({ sessionSize: { day: dayKey(), size: b.dataset.size } });
     render();
@@ -1568,7 +1708,10 @@ document.addEventListener('change', async (e) => {
 });
 
 document.addEventListener('change', (e) => {
-  if (e.target.name === 'how') {
+  if (e.target.matches('[data-widget-names]')) {
+    S.setPrefs({ widgetNames: e.target.checked });
+    publishWidget();
+  } else if (e.target.name === 'how') {
     const box = $('[data-new-pass]', e.target.closest('form'));
     if (box) box.hidden = e.target.value !== 'new';
   } else if (e.target.dataset.rem) {
@@ -1722,7 +1865,11 @@ function render() {
   if (same) window.scrollTo(0, scroll);
   const tab = { list: 'lists', tag: 'lists' }[r.name] || r.name;
   $$('.nav a').forEach((a) => a.toggleAttribute('aria-current', a.dataset.tab === tab));
+  const quiet = r.name === 'pray' && quietPrefs().on;
+  document.body.classList.toggle('quiet', quiet);
+  keepAwake(quiet);
   if (r.name === 'pray') bindSwipe();
+  runCardTimer();
 }
 
 function applyTheme() {
@@ -1730,6 +1877,10 @@ function applyTheme() {
   if (t === 'auto') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = t;
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && document.body.classList.contains('quiet')) keepAwake(true);
+});
 
 window.addEventListener('hashchange', () => {
   if (route().name !== 'pray') session = null;
@@ -1754,13 +1905,24 @@ render();
 
 // In the App Store app: notifications, and letspray:// links from Shortcuts.
 if (Notify.isNativeApp()) {
-  Notify.onOpen((to) => {
-    location.hash = to;
+  Notify.registerActions().catch(() => {});
+  Notify.onOpen(({ actionId, route, itemId, notification }) => {
+    if (actionId === 'snooze') return Notify.snooze(notification).then(() => toast('Reminder in 1 hour'));
+    if (actionId === 'later' && itemId) return S.followUpLater(itemId, startOfDay() + 86400000);
+    if (actionId === 'start') {
+      startSession();
+      location.hash = '#/pray';
+      return;
+    }
+    location.hash = route;
+    if (actionId === 'update' && itemId) setTimeout(() => openUpdateSheet(itemId), 300);
   });
   const openLink = (url) => {
     try {
       const u = new URL(url);
-      if (u.hostname === 'add' || u.pathname.replace(/\//g, '') === 'add') location.hash = `#/add?${u.searchParams}`;
+      const where = u.hostname || u.pathname.replace(/\//g, '');
+      if (where === 'add') location.hash = `#/add?${u.searchParams}`;
+      else if (where === 'pray') location.hash = '#/pray'; // from the widget
     } catch {
       // not a link we handle
     }
@@ -1772,9 +1934,18 @@ if (Notify.isNativeApp()) {
   Notify.permission().then((p) => {
     notifyState = p;
   });
-  S.subscribe((kind) => kind !== 'prefs' && scheduleReminders());
-  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && scheduleReminders());
+  S.subscribe((kind) => {
+    if (kind === 'prefs') return;
+    scheduleReminders();
+    publishWidget();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    scheduleReminders();
+    publishWidget();
+  });
   scheduleReminders();
+  publishWidget();
 }
 Sync.initSync();
 

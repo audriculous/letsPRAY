@@ -5,6 +5,8 @@ Let’s Pray is ready to build as an iPhone app with [Capacitor](https://capacit
 What the iPhone app adds over the web version:
 
 - **Push reminders**: a daily reminder at your chosen time and days, plus a follow-up the morning after a dated prayer. They are scheduled on the phone, so no server is needed and they arrive with the app closed. Lock-screen text says only how many prayer points there are unless you turn on details.
+- **Buttons on reminders**: press and hold a reminder for *Start praying* or *Remind me in 1 hour*; a follow-up offers *Add update* or *Ask tomorrow*.
+- **Widgets**: today's prayers on the Home Screen (small, medium, large) and Lock Screen (counts only). On a Mac running macOS Sonoma or later, the same widget goes on the desktop or in Notification Center straight from the iPhone; the large size is designed for the desktop. Tapping a widget starts a prayer session.
 - **Siri and Shortcuts**: `letspray://add?text=…` opens Quick add, even from closed.
 - **Backups and calendar files** open the share sheet, so they can go to Files, iCloud Drive or Mail.
 
@@ -25,10 +27,20 @@ npm run ios
 
 `npm run ios` copies the app into `www/`, updates the Xcode project and opens it. Then in Xcode:
 
-1. Select the **App** target, then **Signing & Capabilities**. Choose your **Team**.
-2. Change the **Bundle Identifier** from `com.letspray.app` to one you own, such as `au.org.yourchurch.letspray`. Put the same value in `appId` in `capacitor.config.json`.
-3. Plug in your iPhone, pick it at the top of the window, and press **Run** (▶).
-4. On the iPhone, the first time you turn on a reminder, allow notifications.
+1. Choose your own app ID first. In Terminal, in the project folder, run (with your own reverse-domain name):
+
+   ```
+   npm run set-app-id -- au.org.yourchurch.letspray
+   npm run ios
+   ```
+
+   This changes it everywhere at once: the app, the widget (`….widget`) and the App Group the two share (`group.…`).
+2. In Xcode, select the **App** target, then **Signing & Capabilities**, and choose your **Team**. Do the same for the **LetsPrayWidgetExtension** target.
+3. On both targets, check the **App Groups** capability shows your group ticked. If it is red or unticked, tick it (or press the refresh button) so Xcode registers it with Apple. The widget reads today's prayers through this group.
+4. Plug in your iPhone, pick it at the top of the window, and press **Run** (▶).
+5. On the iPhone, the first time you turn on a reminder, allow notifications. Then add the widget: touch and hold the Home Screen, tap **Edit → Add Widget**, and choose Let’s Pray.
+
+I wrote the widget and its Xcode set-up without a Mac to build on, so the first build is its real test. If Xcode shows an error, copy it into a Claude Code session on your Mac (or here) and it can be fixed quickly.
 
 Whenever the app’s code changes, run `npm run ios` again before building.
 
@@ -42,6 +54,12 @@ Whenever the app’s code changes, run `npm run ios` again before building.
    - **App Privacy**: *Data Not Collected*. Prayer points stay on the device, and sync goes straight to the user’s own GitHub account, encrypted.
    - **Encryption**: App Store Connect asks whether the app uses encryption. Let’s Pray uses standard AES encryption from iOS to protect the user’s own data. Read Apple’s questions carefully and answer for your situation; this kind of use is usually exempt from export paperwork.
 4. Submit for review. Apple looks for apps that do more than show a website; the native reminders, follow-ups, share sheet and Siri support help here, so mention them in the review notes.
+
+## On your Mac
+
+- **Widget on the desktop**: on macOS Sonoma or later, signed in to the same Apple Account as your iPhone, right-click the desktop, choose **Edit Widgets**, and pick Let’s Pray under **From iPhone**. Your iPhone needs to be nearby or on the same Wi-Fi.
+- **The app itself**: on a Mac with Apple silicon, the iPhone app can run as a Mac app. In App Store Connect, under **Pricing and Availability**, make it available on Apple silicon Macs. Until then, the web version keeps working in Safari (**File → Add to Dock**).
+- A fully native Mac app (with its own Mac widget, independent of the iPhone) is possible later. Capacitor doesn’t provide Mac (Mac Catalyst) builds, so it would be a small separate Mac app around the same web code, built and tested on a Mac.
 
 ## Updating the icon or launch screen
 

@@ -22,6 +22,9 @@ A calm, tidy prayer list that runs as a web app on iPhone and Mac, keeps both in
 - **Follow-ups**: the day after a dated prayer, Today asks *how did it go?*, with Add update, Answered, Tomorrow and Done.
 - **Pins**: put an urgent prayer into every session for 3 days, a week, 2 weeks or until you unpin it. Quick add understands "pray every day this week", "daily for 2 weeks" and `#pin`.
 - **Reminders**: in the iPhone app, a daily push reminder at your chosen time and days, and a follow-up reminder the morning after a dated prayer. Lock-screen text stays private unless you turn on details. The web version offers a repeating calendar event instead.
+- **Widgets** (iPhone app): today's prayers on the Home Screen and Lock Screen, and on a Mac desktop straight from the iPhone (macOS Sonoma or later). Names can be hidden; Lock Screen widgets only show counts.
+- **Buttons on reminders** (iPhone app): *Start praying* or *Remind me in 1 hour*; follow-ups offer *Add update* or *Ask tomorrow*. Today's reminder is skipped once you have prayed.
+- **Quiet mode**: the moon button in a prayer session clears the screen down to the prayer, keeps the screen awake, and can run a gentle timer on each card (1, 2, 3 or 5 minutes) that chimes when the time is up.
 - **Siri and Shortcuts**: a shortcut can open Quick add with dictated text ("Hey Siri, add prayer"). Settings shows the link and the steps.
 - **Undo**: deleting, marking answered, saving an edit or adding prayers shows an *Undo* button for a few seconds (⌘Z on a Mac). In a prayer session, going back a card un-marks a mis-tapped *Prayed*. An undo also syncs, so a restored prayer comes back on your other devices.
 - **No duplicates**: Quick add spots prayers you already have, even written differently ("Sue and Ben Carter" matches "Ben & Sue Carter"). Pasted lists skip repeats unless you choose to add them; a single repeat needs a second press.
@@ -89,6 +92,8 @@ npm test        # unit tests for merging, sessions, tags, parsing and encryption
 | `js/crypto.js` | End-to-end encryption for sync (PBKDF2 + AES-GCM) |
 | `js/keystore.js` | Keeps the non-extractable sync key in IndexedDB |
 | `js/notify.js` | Reminders: iPhone notifications, and the calendar fallback |
+| `js/widget.js` | The snapshot of the coming week that the widgets show |
+| `ios/App/LetsPrayWidget/` | The widget (SwiftUI, WidgetKit) |
 | `ios/` | The Xcode project for the iPhone app (Capacitor) |
 | `privacy.html` | Privacy policy for the App Store listing |
 | `js/app.js` | Views, prayer session, editors |

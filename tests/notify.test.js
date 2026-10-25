@@ -45,3 +45,17 @@ test('calendar file repeats on the chosen days with an alert', () => {
   assert.match(calendarFile({ days: [0, 1, 2, 3, 4, 5, 6] }, NOW), /RRULE:FREQ=DAILY/);
   assert.ok(ics.includes('\r\n'));
 });
+
+test('reminders carry their buttons, and today’s is skipped once prayed', () => {
+  const d = emptyData();
+  d.items.a = item('Surgery', { eventAt: new Date(2026, 9, 26).getTime() });
+  const early = new Date(2026, 9, 24, 5).getTime(); // before the 7am reminder
+  const before = plan(d, { on: true, followUps: true }, early);
+  assert.equal(before[0].schedule.at.getDate(), 24);
+  assert.ok(before.filter((n) => n.title === 'Time to pray').every((n) => n.actionTypeId === 'PRAY'));
+  const follow = before.find((n) => n.title === 'How did it go?');
+  assert.equal(follow.actionTypeId, 'FOLLOW');
+  assert.equal(follow.extra.itemId, 'Surgery');
+  d.days['2026-10-24'] = 4;
+  assert.equal(plan(d, { on: true, followUps: false }, early)[0].schedule.at.getDate(), 25);
+});

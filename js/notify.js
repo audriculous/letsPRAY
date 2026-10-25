@@ -1,13 +1,14 @@
 // Reminders. In the App Store app (Capacitor) these are real iPhone
 // notifications, scheduled on the device: no server, and they arrive with
 // the app closed. In a browser, a repeating calendar event stands in.
-import { buildSession, startOfDay, live } from './model.js';
+import { buildSession, startOfDay, live, dayKey } from './model.js';
 
 const DAY = 86400000;
 const DAILY_BASE = 1000; // ids 1000..1029 for the next 30 days
 const FOLLOW_BASE = 2000; // ids 2000..2019 for follow-ups
 const DAYS_AHEAD = 30; // iOS keeps at most 64 pending notifications
 const MAX_FOLLOW_UPS = 20;
+const SNOOZE_ID = 3000;
 
 export const DEFAULT_REMINDER = { on: false, hour: 7, minute: 0, days: [0, 1, 2, 3, 4, 5, 6], details: false, followUps: true };
 
@@ -38,11 +39,12 @@ export function plan(data, reminder, now = Date.now()) {
       if (!r.days.includes(new Date(day).getDay())) continue;
       const when = atTime(day, r);
       if (when.getTime() <= now) continue;
+      if (i === 0 && data.days[dayKey(now)]) continue; // already prayed today
       const cards = buildSession(data, 1, when.getTime());
       const first = cards[0] && data.items[cards[0].itemId];
       const count = cards.length ? plural(cards.length, 'prayer point') : 'Your prayer lists';
       const body = r.details && first ? `${count} today, starting with ${first.title}.` : `${count} today.`;
-      out.push({ id: DAILY_BASE + i, title: 'Time to pray', body, schedule: { at: when, allowWhileIdle: true }, extra: { route: '#/today' } });
+      out.push({ id: DAILY_BASE + i, title: 'Time to pray', body, actionTypeId: 'PRAY', schedule: { at: when, allowWhileIdle: true }, extra: { route: '#/today' } });
     }
   }
   if (r.followUps) {
@@ -59,8 +61,9 @@ export function plan(data, reminder, now = Date.now()) {
         id: FOLLOW_BASE + k,
         title: 'How did it go?',
         body: r.details ? `${item.title} was yesterday. Ask how it went.` : 'Something you prayed about was yesterday. Ask how it went.',
+        actionTypeId: 'FOLLOW',
         schedule: { at: when, allowWhileIdle: true },
-        extra: { route: '#/today' },
+        extra: { route: '#/today', itemId: item.id },
       });
     });
   }
@@ -82,14 +85,41 @@ export async function reschedule(data, reminder) {
   const pending = await ln.getPending();
   const ours = pending.notifications.filter((n) => n.id >= DAILY_BASE && n.id < FOLLOW_BASE + MAX_FOLLOW_UPS);
   if (ours.length) await ln.cancel({ notifications: ours.map((n) => ({ id: n.id })) });
+  if (data.days[dayKey()]) await ln.cancel({ notifications: [{ id: SNOOZE_ID }] }); // prayed, so no snoozed nudge
   if ((await ln.checkPermissions()).display !== 'granted') return;
   const list = plan(data, reminder);
   if (list.length) await ln.schedule({ notifications: list });
 }
 
-// Tapping a notification opens the app where it points.
+// Buttons on the notifications themselves (press and hold, or swipe down).
+export async function registerActions() {
+  await LN()?.registerActionTypes({
+    types: [
+      { id: 'PRAY', actions: [{ id: 'start', title: 'Start praying', foreground: true }, { id: 'snooze', title: 'Remind me in 1 hour' }] },
+      { id: 'FOLLOW', actions: [{ id: 'update', title: 'Add update', foreground: true }, { id: 'later', title: 'Ask tomorrow' }] },
+    ],
+  });
+}
+
+// The same reminder again in an hour.
+export async function snooze(notification, now = Date.now()) {
+  await LN()?.schedule({
+    notifications: [{
+      id: SNOOZE_ID,
+      title: notification?.title || 'Time to pray',
+      body: notification?.body || 'Your prayer points are ready.',
+      actionTypeId: 'PRAY',
+      schedule: { at: new Date(now + 3600000), allowWhileIdle: true },
+      extra: { route: '#/today' },
+    }],
+  });
+}
+
+// A tap or a button on a notification: { actionId, route, itemId, notification }.
 export function onOpen(fn) {
-  LN()?.addListener('localNotificationActionPerformed', (e) => fn(e.notification?.extra?.route || '#/today'));
+  LN()?.addListener('localNotificationActionPerformed', (e) =>
+    fn({ actionId: e.actionId, route: e.notification?.extra?.route || '#/today', itemId: e.notification?.extra?.itemId, notification: e.notification }),
+  );
 }
 
 // A repeating calendar event with an alert, for the web version.
