@@ -177,7 +177,7 @@ VIEWS.today = () => {
       <div class="options" role="radiogroup">${SIZES.map(
         ([id, label]) => `<button role="radio" aria-checked="${id === size[0]}" data-act="size" data-size="${id}">${label}</button>`,
       ).join('')}</div>
-      ${first ? `<p class="hero-first"><b>First up: ${esc(first.title)}</b><span>From ${esc(data.categories[first.categoryId].name)}. ${size[3]}</span></p>` : ''}
+      ${first ? `<p class="hero-first"><b>First up: ${esc(first.title)}</b><span>From ${esc(data.categories[first.categoryId].name)}. ${isPinned(first) ? 'Pinned to every session for now.' : size[3]}</span></p>` : ''}
     </section>`;
   }
 
