@@ -2,6 +2,7 @@ import * as S from './store.js';
 import * as Sync from './sync.js';
 import { activeCategories, itemsIn, answeredItems, buildSession, streak, weekStats, allTags, live, dayKey, startOfDay, merge, listDue, nextDue, WEEKDAY_NAMES, COLOURS } from './model.js';
 import { parseMany } from './parse.js';
+import { MIN_PASSPHRASE, normalisePassphrase } from './crypto.js';
 import { suggestTags } from './tags.js';
 import { icon, CATEGORY_ICONS } from './icons.js';
 import { verseFor } from './verses.js';
@@ -290,32 +291,96 @@ VIEWS.answered = () => {
   }`;
 };
 
+let showReset = false; // "Forgot it?" form while locked
+let changingPass = false; // "Change passphrase" form while connected
+
+const passFields = (confirmIt, placeholder = 'Sync passphrase') => `
+  <input name="pass" type="password" placeholder="${placeholder}" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+  ${confirmIt ? '<input name="pass2" type="password" placeholder="Type it again" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" required>' : ''}
+  <label class="show-pass"><input type="checkbox" data-show-pass> Show passphrase</label>`;
+
 function syncSection() {
   const cfg = S.getPrefs().sync;
   const st = Sync.getStatus();
-  if (cfg) {
+  const line = (text) => `<div class="sync-line"><span class="sync-dot is-${st.state}"></span><span>${esc(text)}</span>
+    ${st.at && st.state === 'ok' ? `<span class="muted">· ${new Date(st.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>` : ''}</div>`;
+
+  if (!cfg) {
     return `<div class="card pad">
-      <div class="sync-line"><span class="sync-dot is-${st.state}"></span><span>${esc(st.message || 'Connected')}</span>
-      ${st.at && st.state === 'ok' ? `<span class="muted">· ${new Date(st.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>` : ''}</div>
-      <p class="muted small">Syncing through a private GitHub Gist. Use the same token on your Mac and iPhone and they will stay in step.</p>
-      <div class="btn-row">
-        <button class="btn" data-act="sync-now">${icon('sync')} Sync now</button>
-        <button class="btn btn-quiet" data-act="sync-off">Disconnect</button>
-      </div>
+      <p>Keep your Mac and iPhone in step through your own GitHub account. Everything is <b>encrypted on this device</b> with a passphrase only you know, so GitHub, or anyone who finds the link, only ever sees scrambled data.</p>
+      <ol class="steps">
+        <li><a href="https://github.com/settings/tokens/new?scopes=gist&description=Let%27s%20Pray%20sync" target="_blank" rel="noopener">Create a GitHub token</a> with only the <b>gist</b> box ticked.</li>
+        <li>Choose a sync passphrase. Four or more random words work well.</li>
+        <li>Enter both here, and the same on your other device.</li>
+      </ol>
+      ${st.state === 'syncing' ? line(st.message) : ''}
+      <form class="sync-form" data-form="connect">
+        <input name="token" type="password" placeholder="GitHub token (ghp_…)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+        ${passFields(true)}
+        <p class="error small" data-form-error>${st.state === 'error' ? esc(st.message) : ''}</p>
+        <button class="btn btn-primary" type="submit">${icon('lock')} Connect</button>
+      </form>
+      <p class="muted small">Your passphrase is never stored or sent anywhere. If you forget it, your prayers on each device are safe, and you can choose a new one.</p>
     </div>`;
   }
+
+  if (st.state === 'locked') {
+    return `<div class="card pad">
+      ${line(st.setup ? 'Encryption needs setting up' : 'Sync paused')}
+      <p class="small">${esc(st.message)}</p>
+      ${
+        showReset
+          ? `<form class="sync-form" data-form="reset">
+          <p class="small">Choose a new passphrase. This device’s prayers become the sync copy, and your other devices will ask for the new passphrase, then add their prayers back in.</p>
+          ${passFields(true, 'New passphrase')}
+          <p class="error small" data-form-error></p>
+          <div class="btn-row"><button class="btn btn-primary" type="submit">${icon('lock')} Start again</button><button class="btn btn-quiet" type="button" data-act="sync-forgot">Back</button></div>
+        </form>`
+          : `<form class="sync-form" data-form="unlock">
+          ${passFields(!!st.setup, st.setup ? 'Choose a sync passphrase' : 'Sync passphrase')}
+          <p class="error small" data-form-error></p>
+          <div class="btn-row"><button class="btn btn-primary" type="submit">${icon('lock')} ${st.setup ? 'Turn on encryption' : 'Unlock'}</button>${st.setup ? '' : '<button class="btn btn-quiet" type="button" data-act="sync-forgot">Forgot it?</button>'}</div>
+        </form>`
+      }
+    </div>`;
+  }
+
   return `<div class="card pad">
-    <p>Keep your Mac and iPhone in step by syncing through a private GitHub Gist. Your prayer points stay in your own GitHub account.</p>
-    <ol class="steps">
-      <li><a href="https://github.com/settings/tokens/new?scopes=gist&description=Let%27s%20Pray%20sync" target="_blank" rel="noopener">Create a GitHub token</a> with only the <b>gist</b> box ticked.</li>
-      <li>Paste it below on each device.</li>
-    </ol>
-    <form class="token-form" data-form="sync">
-      <input name="token" type="password" placeholder="ghp_…" autocomplete="off" autocapitalize="off" spellcheck="false" required>
-      <button class="btn btn-primary" type="submit">Connect</button>
-    </form>
-    ${st.state === 'error' ? `<p class="error small">${esc(st.message)}</p>` : ''}
+    ${line(st.message || 'Connected')}
+    <p class="secure-line">${icon('lock')} End-to-end encrypted. Only devices with your passphrase can read your prayers.</p>
+    <div class="btn-row">
+      <button class="btn" data-act="sync-now">${icon('sync')} Sync now</button>
+      <button class="btn" data-act="sync-change">Change passphrase</button>
+      <button class="btn btn-quiet" data-act="sync-off">Disconnect</button>
+    </div>
+    ${
+      changingPass
+        ? `<form class="sync-form" data-form="change">
+        <p class="small">Your other devices will ask for the new passphrase next time they sync.</p>
+        ${passFields(true, 'New passphrase')}
+        <p class="error small" data-form-error></p>
+        <div class="btn-row"><button class="btn btn-primary" type="submit">${icon('lock')} Save new passphrase</button><button class="btn btn-quiet" type="button" data-act="sync-change">Cancel</button></div>
+      </form>`
+        : ''
+    }
   </div>`;
+}
+
+// Redraw the sync card without losing anything half typed.
+function refreshSync() {
+  const box = $('#sync-section');
+  if (!box) return;
+  const typed = $$('input[name]', box).map((i) => [i.closest('form')?.dataset.form, i.name, i.value, i.type]);
+  box.innerHTML = syncSection();
+  for (const [form, name, value, type] of typed) {
+    const el = $(`form[data-form="${form}"] input[name="${name}"]`, box);
+    if (el) {
+      el.value = value;
+      el.type = type;
+    }
+  }
+  const shown = $('form input[name="pass"]', box)?.type === 'text';
+  $$('[data-show-pass]', box).forEach((c) => (c.checked = shown));
 }
 
 VIEWS.settings = () => {
@@ -358,7 +423,7 @@ VIEWS.settings = () => {
 
   <h3 class="section-title">Backup</h3>
   <div class="card pad">
-    <p class="muted small">Download everything as a file, or bring a backup back in. Importing merges with what is already here.</p>
+    <p class="muted small">Download everything as a file, or bring a backup back in. Importing merges with what is already here. Backup files are not encrypted, so keep them somewhere safe.</p>
     <div class="btn-row">
       <button class="btn" data-act="export">Export backup</button>
       <label class="btn">Import backup<input type="file" accept="application/json,.json" data-act="import" hidden></label>
@@ -375,7 +440,7 @@ VIEWS.settings = () => {
       : 'On Mac: in Safari choose <b>File → Add to Dock</b>, or in Chrome use the install icon in the address bar.'
   } Let’s Pray then opens like an app and works offline.</p></div>`
   }
-  <p class="muted small center foot">Let’s Pray · your data lives on this device${prefs.sync ? ' and in your private gist' : ''}.</p>`;
+  <p class="muted small center foot">Let’s Pray · your data lives on this device${prefs.sync ? ', with an encrypted copy in your GitHub account' : ''}.</p>`;
 };
 
 // ---------- Prayer session ----------
@@ -1016,8 +1081,18 @@ const ACTIONS = {
     render();
   },
   'sync-now': () => Sync.syncNow(),
-  'sync-off': () => {
-    if (confirm('Stop syncing on this device? Your prayer points stay here.')) Sync.disconnect();
+  'sync-off': async () => {
+    if (!confirm('Stop syncing on this device? Your prayer points stay here, and the key is removed from this device.')) return;
+    await Sync.disconnect();
+    render();
+  },
+  'sync-forgot': () => {
+    showReset = !showReset;
+    refreshSync();
+  },
+  'sync-change': () => {
+    changingPass = !changingPass;
+    refreshSync();
   },
   export: () => {
     const blob = new Blob([JSON.stringify(S.getData(), null, 2)], { type: 'application/json' });
@@ -1050,21 +1125,48 @@ document.addEventListener('change', async (e) => {
   e.target.value = '';
 });
 
+const SYNC_FORMS = {
+  connect: { busy: 'Encrypting…', done: 'Encrypted sync is on', run: (f, pass) => Sync.connect(f.token.value, pass) },
+  unlock: { busy: 'Unlocking…', done: 'Sync unlocked', run: (f, pass) => Sync.unlock(pass) },
+  reset: { busy: 'Encrypting…', done: 'Sync started again with your new passphrase', run: (f, pass) => Sync.changePassphrase(pass) },
+  change: { busy: 'Encrypting…', done: 'New passphrase saved', run: (f, pass) => Sync.changePassphrase(pass) },
+};
+
 document.addEventListener('submit', async (e) => {
-  const form = e.target.closest('[data-form="sync"]');
-  if (!form) return;
+  const form = e.target.closest('form[data-form]');
+  const kind = SYNC_FORMS[form?.dataset.form];
+  if (!kind) return;
   e.preventDefault();
-  const btn = $('button', form);
+  const error = $('[data-form-error]', form);
+  const pass = normalisePassphrase(form.pass.value);
+  if (pass.length < MIN_PASSPHRASE) return (error.textContent = `Use at least ${MIN_PASSPHRASE} characters. Four random words work well.`);
+  if (form.pass2 && normalisePassphrase(form.pass2.value) !== pass) return (error.textContent = 'Those two passphrases don’t match.');
+  if (form.dataset.form === 'reset' && !confirm('Start sync again with this new passphrase? Your other devices will need it too.')) return;
+  const btn = $('button[type=submit]', form);
+  const label = btn.innerHTML;
   btn.disabled = true;
-  btn.textContent = 'Connecting…';
+  btn.textContent = kind.busy;
   try {
-    await Sync.connect(form.token.value);
-    toast('Sync connected');
-  } catch {
-    btn.disabled = false;
-    btn.textContent = 'Connect';
+    await kind.run(form, pass);
+    showReset = false;
+    changingPass = false;
+    toast(kind.done);
+    render();
+  } catch (err) {
+    // The card may have been redrawn by a status change; show the error in whichever form is there now.
+    refreshSync();
+    const now = $(`form[data-form] [data-form-error]`, $('#sync-section') || document);
+    if (now && !now.textContent) now.textContent = err.message;
+    if (btn.isConnected) {
+      btn.disabled = false;
+      btn.innerHTML = label;
+    }
   }
-  render();
+});
+
+document.addEventListener('change', (e) => {
+  if (!e.target.matches('[data-show-pass]')) return;
+  $$('input[name^="pass"]', e.target.closest('form')).forEach((i) => (i.type = e.target.checked ? 'text' : 'password'));
 });
 
 document.addEventListener('change', (e) => {
@@ -1131,9 +1233,12 @@ window.addEventListener('hashchange', () => {
 S.subscribe((kind) => {
   if (kind !== 'prefs') render();
 });
-Sync.onStatus(() => {
-  const s = $('#sync-section');
-  if (s) s.innerHTML = syncSection();
+let lastStatus = '';
+Sync.onStatus((st) => {
+  // Only redraw when something visible changed, so typing isn't interrupted.
+  const sig = `${st.state}|${st.message}|${st.state === 'ok' ? Math.floor(st.at / 60000) : ''}`;
+  if (sig !== lastStatus) refreshSync();
+  lastStatus = sig;
   $('.nav-sync')?.setAttribute('data-state', Sync.getStatus().state);
 });
 

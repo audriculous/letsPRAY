@@ -448,6 +448,19 @@ button.chip:active, a.chip:active { transform: scale(0.96); }
 .sync-dot.is-ok { background: var(--teal); }
 .sync-dot.is-syncing { background: var(--cat-sand); animation: pulse 1s infinite alternate; }
 .sync-dot.is-error { background: var(--danger); }
+.sync-dot.is-locked { background: var(--accent); }
+.nav-sync[data-state='locked'] { background: var(--accent); }
+.sync-form { display: grid; gap: 10px; margin-top: 12px; }
+.sync-form input[name] { height: 46px; padding: 0 14px; border: 1.5px solid var(--line); border-radius: 14px; background: var(--surface-2); outline: none; font-size: 16px; }
+.sync-form input[name]:focus { border-color: var(--accent); }
+.sync-form .btn-row { margin-top: 0; }
+.sync-form .error:empty { display: none; }
+.sync-form .error { margin-top: 0; }
+.show-pass { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; color: var(--ink-2); }
+.show-pass input { width: 18px; height: 18px; accent-color: var(--accent); }
+.secure-line { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0 4px; font-size: 15px; color: var(--teal); font-weight: 500; }
+.secure-line .ic { width: 18px; height: 18px; margin-top: 1px; }
+.card .sync-form + .muted.small { margin-top: 12px; }
 @keyframes pulse { to { opacity: 0.3; } }
 
 .muted { color: var(--ink-2); }

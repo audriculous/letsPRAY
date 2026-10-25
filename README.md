@@ -44,14 +44,23 @@ GitHub Pages on a private repository needs a paid GitHub plan. If the repository
 
 ## Syncing between Mac and iPhone
 
-Sync goes through a single **private GitHub Gist** in your own account, so there is no server to run.
+Sync goes through a gist in your own GitHub account, so there is no server to run, and everything is **end-to-end encrypted**: GitHub only ever holds scrambled data.
 
 1. Create a token at <https://github.com/settings/tokens/new?scopes=gist&description=Let%27s%20Pray%20sync> with only the **gist** box ticked. Pick an expiry you are happy with.
-2. In the app, open *Settings → Sync*, paste the token and tap *Connect*. Do the same on the other device.
+2. Choose a sync passphrase of at least 10 characters. Four or more random words work well.
+3. In the app, open *Settings → Sync*, enter the token and passphrase, and tap *Connect*. Do the same on the other device.
 
-The first device creates the gist; the second finds it. The app syncs when it opens, when it comes back to the foreground, and a few seconds after each change. Each prayer point and list merges on its own, so edits on different devices do not overwrite each other; if the same point is edited on both, the later edit wins.
+The app syncs when it opens, when it comes back to the foreground, and a few seconds after each change. Each prayer point and list merges on its own, so edits on different devices do not overwrite each other; if the same point is edited on both, the later edit wins.
 
-The token is stored only on each device. Anyone with the token can read and edit your gists, so do not share it. Disconnecting leaves your prayer points on the device.
+### How your data is protected
+
+- **Encrypted before it leaves the device.** Your passphrase is turned into a 256-bit key with PBKDF2 (SHA-256, 600,000 rounds, random salt), and the data is sealed with AES-256-GCM, with a fresh random IV for every upload. This uses the browser's built-in Web Crypto.
+- **The passphrase is never stored or sent.** Each device keeps only the derived key, in IndexedDB, marked non-extractable so it can be used but not read or copied out.
+- **Wrong or changed passphrases are caught.** GCM detects a wrong key or altered data, and the app stops rather than overwrite good data. If you change the passphrase on one device, the others pause and ask for the new one.
+- **No readable history.** GitHub keeps every version of a gist, and a "secret" gist is only unlisted, not private: anyone with its link can read it. So whenever the encryption changes (turning it on, or a new passphrase), the data moves to a brand new gist and the old ones are deleted, history and all. Data from the earlier unencrypted version is moved the same way.
+- **Forgot the passphrase?** Your prayers on each device are untouched. Choose *Forgot it?*, set a new passphrase, and that device's prayers become the sync copy; the other devices then ask for the new passphrase and merge their own prayers back in.
+
+What it does not cover: prayer points stored on each device are protected by that device's own lock (your iPhone passcode and Mac login), and backup files you export are not encrypted, so keep them somewhere safe. The GitHub token is stored on each device; it can only read and write gists, and you can revoke it on GitHub at any time.
 
 ## Backups
 
@@ -60,7 +69,7 @@ The token is stored only on each device. Anyone with the token can read and edit
 ## Development
 
 ```
-npm test        # unit tests for merging, sessions and tag suggestions
+npm test        # unit tests for merging, sessions, tags, parsing and encryption
 ```
 
 | File | Purpose |
@@ -70,6 +79,8 @@ npm test        # unit tests for merging, sessions and tag suggestions
 | `js/parse.js` | Quick add: plain-English parsing of titles, lists, dates and tags |
 | `js/store.js` | Local storage and edits |
 | `js/sync.js` | GitHub Gist sync |
+| `js/crypto.js` | End-to-end encryption for sync (PBKDF2 + AES-GCM) |
+| `js/keystore.js` | Keeps the non-extractable sync key in IndexedDB |
 | `js/app.js` | Views, prayer session, editors |
 | `sw.js` | Offline cache. Bump `VERSION` when you change files |
 
