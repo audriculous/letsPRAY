@@ -12,6 +12,7 @@ import { icon, CATEGORY_ICONS } from './icons.js';
 import { verseFor } from './verses.js';
 import { BOOKS, PLANS, planDays, planTitle, progress, isTicked, dayDone, tickKey, readLink, defaultPace, dateOfDay, fromKey, startFor, readOn } from './bible.js';
 import * as Photos from './photos.js';
+import { enableSorting } from './sortable.js';
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
@@ -256,11 +257,12 @@ function listsBody() {
   if (query.trim()) return searchResults();
   const data = S.getData();
   const tags = allTags(data);
-  return `<div class="cat-grid">
-      ${activeCategories(data)
+  const cats = activeCategories(data);
+  return `<div class="cat-grid" data-sortable="lists">
+      ${cats
         .map((cat) => {
           const n = itemsIn(data, cat.id).length;
-          return `<a class="cat-card" href="#/list/${cat.id}" style="${catColour(cat)}">
+          return `<a class="cat-card" href="#/list/${cat.id}" data-sort-id="${cat.id}" draggable="false" style="${catColour(cat)}">
             <span class="cat-badge">${icon(cat.icon)}</span>
             <span class="cat-name">${esc(cat.name)}</span>
             <span class="cat-count">${n ? plural(n, 'point') : 'Empty'}${cat.share && !cat.share.gone ? ` · ${icon('people')}${cat.share.role === 'member' && cat.share.owner ? `From ${esc(cat.share.owner)}` : 'Shared'}` : ''}</span>
@@ -269,6 +271,7 @@ function listsBody() {
         .join('')}
       <button class="cat-card cat-new" data-act="new-cat">${icon('plus')}<span class="cat-name">New list</span></button>
     </div>
+    ${cats.length > 1 ? `<p class="muted small sort-hint">${matchMedia('(pointer: coarse)').matches ? 'Hold a list and drag to move it.' : 'Drag a list to move it.'}</p>` : ''}
     ${
       tags.length
         ? `<h3 class="section-title">Tags</h3>
@@ -699,17 +702,16 @@ VIEWS.settings = () => {
   ${shortcutSection()}
 
   <h3 class="section-title">Prayer session</h3>
-  <div class="card list">
+  <div class="card list" data-sortable="lists">
     ${cats
       .map(
-        (cat, i) => `<div class="row row-static" style="${catColour(cat)}">
+        (cat) => `<div class="row row-static" data-sort-id="${cat.id}" style="${catColour(cat)}">
         <span class="row-ic">${icon(cat.icon)}</span>
         <span class="row-body"><span class="row-title">${esc(cat.name)}</span><span class="row-notes">${esc(cadence(cat))}</span></span>
         <span class="stepper">
           <button class="icon-btn sm" data-act="per" data-id="${cat.id}" data-d="-1" aria-label="Fewer">−</button>
           <button class="icon-btn sm" data-act="per" data-id="${cat.id}" data-d="1" aria-label="More">+</button>
-          <button class="icon-btn sm" data-act="move" data-id="${cat.id}" data-d="-1" ${i === 0 ? 'disabled' : ''} aria-label="Move up">${icon('up')}</button>
-          <button class="icon-btn sm" data-act="move" data-id="${cat.id}" data-d="1" ${i === cats.length - 1 ? 'disabled' : ''} aria-label="Move down">${icon('down')}</button>
+          <button class="icon-btn sm sort-handle" data-id="${cat.id}" aria-label="Move ${esc(cat.name)}. Drag, or use the arrow keys" title="Drag to move">${icon('grip')}</button>
         </span>
       </div>`,
       )
@@ -1130,6 +1132,7 @@ function openPhotoSheet(key, photoId) {
 // Journal typing saves without redrawing the screen, so the cursor stays put.
 let renderPaused = false;
 let renderMissed = false;
+let sorting = false; // a list is being dragged
 function withoutRender(fn) {
   renderPaused = true;
   try {
@@ -2178,14 +2181,6 @@ const ACTIONS = {
     const cat = S.getData().categories[b.dataset.id];
     S.saveCategory({ ...cat, perSession: Math.min(20, Math.max(0, cat.perSession + Number(b.dataset.d))) });
   },
-  move: (b) => {
-    const ids = activeCategories(S.getData()).map((c) => c.id);
-    const i = ids.indexOf(b.dataset.id);
-    const j = i + Number(b.dataset.d);
-    if (j < 0 || j >= ids.length) return;
-    [ids[i], ids[j]] = [ids[j], ids[i]];
-    S.reorderCategories(ids);
-  },
   theme: (b) => {
     S.setPrefs({ theme: b.dataset.theme });
     applyTheme();
@@ -2491,6 +2486,8 @@ window.addEventListener('hashchange', () => {
 
 S.subscribe((kind) => {
   if (kind === 'prefs' || renderPaused) return;
+  // Or under a list being dragged; it redraws when let go.
+  if (sorting) renderMissed = true;
   // Don't redraw under someone typing in the journal.
   if (document.activeElement?.matches?.('[data-journal]')) renderMissed = true;
   else render();
@@ -2502,6 +2499,34 @@ Sync.onStatus((st) => {
   if (sig !== lastStatus) refreshSync();
   lastStatus = sig;
   $('.nav-sync')?.setAttribute('data-state', Sync.getStatus().state);
+});
+
+// ---------- Moving lists ----------
+
+enableSorting({
+  onStart: () => (sorting = true),
+  onEnd: () => {
+    sorting = false;
+    if (renderMissed) render();
+  },
+  onDrop: (_, ids) => {
+    S.reorderCategories(ids);
+    toast('List moved', { undo: true });
+  },
+});
+
+// The grip in Settings also moves a list with the arrow keys.
+document.addEventListener('keydown', (e) => {
+  const h = e.target.closest?.('.sort-handle');
+  if (!h || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+  e.preventDefault();
+  const ids = activeCategories(S.getData()).map((c) => c.id);
+  const i = ids.indexOf(h.dataset.id);
+  const j = i + (e.key === 'ArrowUp' ? -1 : 1);
+  if (i < 0 || j < 0 || j >= ids.length) return;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  S.reorderCategories(ids);
+  $(`.sort-handle[data-id="${h.dataset.id}"]`)?.focus();
 });
 
 applyTheme();

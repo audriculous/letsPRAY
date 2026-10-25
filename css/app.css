@@ -406,6 +406,15 @@ button.chip:active, a.chip:active { transform: scale(0.96); }
 .cat-badge .ic { width: 23px; height: 23px; }
 .cat-name { margin-top: auto; font: italic 800 26px/1 var(--display); text-transform: uppercase; }
 .cat-count { margin-top: 4px; font-size: 15px; color: var(--ink-2); }
+/* Moving lists by dragging (js/sortable.js) */
+[data-sortable] { position: relative; }
+[data-sortable] > [data-sort-id] { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.is-sorting { cursor: grabbing; }
+.is-dragging { position: relative; z-index: 5; pointer-events: none; transition: none !important; box-shadow: 0 14px 34px rgba(0, 0, 0, 0.18), var(--shadow); }
+.row.is-dragging { background: var(--surface); border-radius: 14px; }
+.row.is-dragging::before, .row.is-dragging + .row::before { opacity: 0; }
+.sort-handle { touch-action: none; cursor: grab; color: var(--ink-3); }
+.sort-hint { margin: 10px 4px 0; }
 .cat-new { background: transparent; border: 1.5px dashed color-mix(in srgb, var(--ink-3) 55%, transparent); box-shadow: none; color: var(--ink-2); }
 .cat-new > .ic { width: 28px; height: 28px; color: var(--ink-3); }
 

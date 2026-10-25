@@ -4,7 +4,7 @@ A calm, tidy prayer list that runs as a web app on iPhone and Mac, keeps both in
 
 ## What it does
 
-- **Lists**: People, Family, Church and Mission to start with. Add, rename, recolour, reorder or delete lists, and choose how many points from each list come up each time.
+- **Lists**: People, Family, Church and Mission to start with. Add, rename, recolour, drag lists into order (hold one on a phone), or delete them, and choose how many points from each list come up each time.
 - **How often**: each list comes up every session, or once a week on a day you choose. A weekly list (say your congregation, 6 names each Sunday) works through everyone in turn, and if you miss the day it waits until you pray it.
 - **Quick add**: the + in the corner (or press N on a Mac). Type a prayer in your own words and it is sorted for you as you type:
   - *Title and details*: "Pray for Mum's surgery on Friday, for peace" becomes *Mum's surgery* with the note *Peace*.

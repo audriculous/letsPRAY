@@ -1,5 +1,5 @@
 // Offline app shell. Bump VERSION whenever files change so devices update.
-const VERSION = 'letspray-v10';
+const VERSION = 'letspray-v11';
 const SHELL = [
   './',
   './index.html',
@@ -20,6 +20,7 @@ const SHELL = [
   './js/share.js',
   './js/bible.js',
   './js/photos.js',
+  './js/sortable.js',
   './js/db.js',
   './icons/icon.svg',
   './icons/icon-192.png',
