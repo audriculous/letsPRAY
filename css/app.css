@@ -735,3 +735,11 @@ body.quiet .pray-actions { grid-template-columns: auto 1fr; }
 .pray-amen.timer-done { animation: amen-ready 1.8s ease-in-out infinite; }
 @keyframes amen-ready { 50% { box-shadow: 0 0 0 8px var(--accent-soft); } }
 @media (prefers-reduced-motion: reduce) { .pray-timer span { animation: none; width: 100%; opacity: 0.5; } }
+
+/* ---------- Shared lists ---------- */
+
+.share-line { display: flex; gap: 8px; align-items: flex-start; margin: -8px 6px 16px; font-size: 15px; color: var(--teal); }
+.share-line .ic { width: 18px; height: 18px; flex: none; margin-top: 2px; }
+.shared-btn { color: var(--teal); }
+.cat-count .ic { width: 13px; height: 13px; vertical-align: -2px; margin-right: 2px; }
+.inline-ic { width: 16px; height: 16px; vertical-align: -3px; }

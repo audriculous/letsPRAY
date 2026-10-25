@@ -6,6 +6,7 @@ import { MIN_PASSPHRASE, normalisePassphrase, ITERATIONS, newSalt, deriveKey, se
 import { loadKey } from './keystore.js';
 import * as Notify from './notify.js';
 import * as Widget from './widget.js';
+import * as Share from './share.js';
 import { suggestTags } from './tags.js';
 import { icon, CATEGORY_ICONS } from './icons.js';
 import { verseFor } from './verses.js';
@@ -259,7 +260,7 @@ function listsBody() {
           return `<a class="cat-card" href="#/list/${cat.id}" style="${catColour(cat)}">
             <span class="cat-badge">${icon(cat.icon)}</span>
             <span class="cat-name">${esc(cat.name)}</span>
-            <span class="cat-count">${n ? plural(n, 'point') : 'Empty'}</span>
+            <span class="cat-count">${n ? plural(n, 'point') : 'Empty'}${cat.share && !cat.share.gone ? ` · ${icon('people')}${cat.share.role === 'member' && cat.share.owner ? `From ${esc(cat.share.owner)}` : 'Shared'}` : ''}</span>
           </a>`;
         })
         .join('')}
@@ -278,6 +279,54 @@ VIEWS.lists = () => `${header('Lists')}
   <div id="lists-body">${listsBody()}</div>
 `;
 
+// ---------- Shared lists (iCloud) ----------
+
+function shareLabel(cat) {
+  const s = cat.share;
+  if (!s) return '';
+  if (s.gone) return s.role === 'member' ? `${s.owner || 'The owner'} stopped sharing this list. Your copy is kept.` : 'No longer shared.';
+  if (s.role === 'member') return `Shared with you${s.owner ? ` by ${s.owner}` : ''}. Changes you make are shared too; when you last prayed stays yours.`;
+  return 'Shared through iCloud. Everyone sees the prayer points and updates; your rotation and pins stay yours.';
+}
+
+function shareButton(cat) {
+  if (!Share.canShare() || (cat.share?.gone && cat.share.role === 'member')) return '';
+  if (cat.share && !cat.share.gone) return `<button class="icon-btn shared-btn" data-act="manage-share" data-id="${cat.id}" aria-label="Sharing" title="Sharing">${icon('people')}</button>`;
+  return `<button class="icon-btn" data-act="share-list" data-id="${cat.id}" aria-label="Share this list" title="Share this list">${icon('share')}</button>`;
+}
+
+let shareRunning = false;
+let shareTimer;
+async function runShareSync() {
+  if (!Share.canShare() || shareRunning) return;
+  shareRunning = true;
+  try {
+    const { joined, gone } = await Share.syncShared(S);
+    for (const j of joined) toast(`Joined “${j.name}”${j.owner ? ` from ${j.owner}` : ''}`);
+    for (const g of gone) if (g.role === 'member') toast(`${g.owner || 'The owner'} stopped sharing “${g.name}”. Your copy is kept.`);
+    return joined;
+  } catch {
+    // Offline or iCloud unavailable: try again later.
+  } finally {
+    shareRunning = false;
+  }
+}
+const queueShareSync = (delay = 2500) => {
+  clearTimeout(shareTimer);
+  shareTimer = setTimeout(runShareSync, delay);
+};
+
+function sharingSection() {
+  if (!Share.canShare()) {
+    return `<div class="card pad"><p class="small">Share a list with your wife, a prayer partner or your staff team through iCloud. It comes with the App Store app: open a list and tap the share button, then invite people through Messages or Mail.</p></div>`;
+  }
+  const lists = Object.values(S.getData().categories).filter((c) => live(c) && c.share && !c.share.gone);
+  return `<div class="card pad">
+    <p class="small">Open a list and tap ${icon('share', 'inline-ic')} to invite people through Messages or Mail. Everyone sees the prayer points, notes, updates and answered prayers. When you last prayed, pins and how often a list comes up stay your own. Prayer details are end-to-end encrypted in iCloud.</p>
+    <p class="muted small" id="icloud-status">${lists.length ? `Sharing ${plural(lists.length, 'list')}.` : 'No shared lists yet.'}</p>
+  </div>`;
+}
+
 VIEWS.list = (id) => {
   const data = S.getData();
   const cat = data.categories[id];
@@ -289,8 +338,9 @@ VIEWS.list = (id) => {
     kicker: `${plural(items.length, 'prayer point')} · ${cadence(cat)}${
       cat.frequency === 'weekly' && items.length ? ` · ${listDue(data, cat) ? 'due today' : `next ${dateLabel(nextDue(data, cat)).toLowerCase()}`}` : ''
     }`,
-    actions: `<button class="icon-btn" data-act="edit-cat" data-id="${id}" aria-label="Edit list">${icon('edit')}</button>`,
+    actions: `${shareButton(cat)}<button class="icon-btn" data-act="edit-cat" data-id="${id}" aria-label="Edit list">${icon('edit')}</button>`,
   })}
+  ${cat.share ? `<p class="share-line">${icon('people')}${esc(shareLabel(cat))}</p>` : ''}
   ${
     items.length
       ? `<div class="card list">${items.map((i) => itemRow(i)).join('')}</div>`
@@ -636,6 +686,9 @@ VIEWS.settings = () => {
 
   <h3 class="section-title">Widgets</h3>
   ${widgetSection()}
+
+  <h3 class="section-title">Shared lists</h3>
+  ${sharingSection()}
 
   <h3 class="section-title">Siri & Shortcuts</h3>
   ${shortcutSection()}
@@ -1308,12 +1361,20 @@ function openCategorySheet(id) {
       if (!existing) location.hash = `#/list/${newId}`;
     } else if ('delete' in b.dataset) {
       const count = itemsIn(S.getData(), id).length;
-      if (confirm(`Delete “${existing.name}”${count ? ` and its ${plural(count, 'prayer point')}` : ''}?`)) {
+      const shared = existing.share && !existing.share.gone;
+      const member = shared && existing.share.role === 'member';
+      const question = member
+        ? `Leave “${existing.name}”? It will be removed from your lists, and stays with everyone else.`
+        : `Delete “${existing.name}”${count ? ` and its ${plural(count, 'prayer point')}` : ''}?${shared ? ' This also stops sharing it; everyone else keeps a copy.' : ''}`;
+      if (!confirm(question)) return;
+      close();
+      (async () => {
+        if (member) await Share.leaveList(S, existing);
+        else if (shared) await Share.stopSharing(S, existing);
         S.deleteCategory(id);
-        close();
-        toast('List deleted', { undo: true });
+        toast(member ? 'Left the shared list' : 'List deleted', { undo: !shared });
         location.hash = '#/lists';
-      }
+      })();
     }
   });
 }
@@ -1597,6 +1658,20 @@ const ACTIONS = {
   'pray-skip': () => prayAdvance(),
   'pray-back': () => prayBack(),
   'pray-answered': (b) => openAnswerSheet(b.dataset.id),
+  'share-list': async (b) => {
+    try {
+      await Share.shareList(S, b.dataset.id);
+    } catch (err) {
+      toast(/account|iCloud|authenticated/i.test(err?.message || '') ? 'Sign in to iCloud in Settings to share lists' : 'Couldn’t share the list. Check you’re online and try again.');
+    }
+  },
+  'manage-share': async (b) => {
+    try {
+      await Share.manageSharing(S.getData().categories[b.dataset.id]);
+    } catch {
+      toast('Couldn’t open sharing. Check you’re online and try again.');
+    }
+  },
   'fu-update': (b) => openUpdateSheet(b.dataset.id),
   'fu-answered': (b) => openAnswerSheet(b.dataset.id),
   'fu-later': (b) => {
@@ -1946,6 +2021,29 @@ if (Notify.isNativeApp()) {
   });
   scheduleReminders();
   publishWidget();
+
+  // Shared lists: pull and push on start, when the app comes back, a few
+  // seconds after changes, and every two minutes while it is open.
+  if (Share.canShare()) {
+    S.subscribe((kind) => kind === 'local' && queueShareSync());
+    document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && queueShareSync(300));
+    setInterval(() => document.visibilityState === 'visible' && runShareSync(), 120000);
+    Share.onShareEvents({
+      shareAccepted: async () => {
+        const joined = await runShareSync();
+        if (joined?.[0]) location.hash = `#/list/${joined[0].id}`;
+      },
+      shareStopped: async ({ zone }) => {
+        const cat = Object.values(S.getData().categories).find((c) => live(c) && c.share?.zone === zone);
+        if (!cat) return;
+        if (cat.share.role === 'member') Share.forget(S, cat);
+        else await Share.stopSharing(S, cat);
+        toast(cat.share.role === 'member' ? `You left “${cat.name}”` : `Stopped sharing “${cat.name}”. Everyone else keeps a copy.`);
+      },
+      shareError: ({ message }) => toast(message || 'iCloud sharing had a problem'),
+    });
+    queueShareSync(500);
+  }
 }
 Sync.initSync();
 

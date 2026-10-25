@@ -1,5 +1,5 @@
 // App state: one data blob in localStorage plus device-only prefs.
-import { normalise, uid, dayKey, activeCategories } from './model.js';
+import { normalise, uid, dayKey, activeCategories, SHARED_ITEM_FIELDS, SHARED_LIST_FIELDS } from './model.js';
 
 const DATA_KEY = 'letspray:data';
 const PREFS_KEY = 'letspray:prefs';
@@ -58,6 +58,11 @@ function commit() {
 
 const now = () => Date.now();
 
+// sharedAt marks the last change to what other people see in a shared list
+// (title, notes, updates, answered and so on). Personal changes such as
+// praying, pins and follow-ups leave it alone, so they are never shared.
+const sharedChanged = (prev, next, keys) => !prev || prev.deleted || keys.some((k) => JSON.stringify(prev[k]) !== JSON.stringify(next[k]));
+
 // ---- Undo ----
 // The last change can be reversed. Before a change touches a record we keep
 // its previous version; undo puts those back with a fresh timestamp, so the
@@ -99,7 +104,8 @@ export function undo() {
   const t = now();
   for (const kind of ['categories', 'items']) {
     for (const [id, prev] of Object.entries(c[kind])) {
-      data[kind][id] = prev === undefined ? { id, deleted: true, updatedAt: t } : { ...prev, updatedAt: t };
+      const was = data[kind][id];
+      data[kind][id] = prev === undefined ? { id, deleted: true, categoryId: was?.categoryId, updatedAt: t, sharedAt: t } : { ...prev, updatedAt: t, sharedAt: t };
     }
   }
   for (const [key, prev] of Object.entries(c.days)) {
@@ -139,7 +145,9 @@ export function saveCategory(fields) {
     const prev = data.categories[id];
     remember('categories', id);
     const order = prev && !prev.deleted ? prev.order : activeCategories(data).length;
-    data.categories[id] = { perSession: 2, ...prev, ...fields, id, order, updatedAt: now() };
+    const next = { perSession: 2, ...prev, ...fields, id, order, updatedAt: now() };
+    if (sharedChanged(prev, next, SHARED_LIST_FIELDS)) next.sharedAt = now();
+    data.categories[id] = next;
     commit();
     return id;
   });
@@ -151,11 +159,11 @@ export function deleteCategory(id) {
     for (const item of Object.values(data.items)) {
       if (item.categoryId === id && !item.deleted) {
         remember('items', item.id);
-        data.items[item.id] = { id: item.id, deleted: true, updatedAt: now() };
+        data.items[item.id] = { id: item.id, deleted: true, categoryId: id, updatedAt: now(), sharedAt: now() };
       }
     }
     remember('categories', id);
-    data.categories[id] = { id, deleted: true, updatedAt: now() };
+    data.categories[id] = { id, deleted: true, updatedAt: now(), sharedAt: now() };
     commit();
   });
 }
@@ -180,7 +188,7 @@ export function saveItem(fields) {
     const id = fields.id || uid('pt');
     const prev = data.items[id];
     remember('items', id);
-    data.items[id] = {
+    const next = {
       tags: [],
       notes: '',
       createdAt: now(),
@@ -194,6 +202,8 @@ export function saveItem(fields) {
       id,
       updatedAt: now(),
     };
+    if (sharedChanged(prev, next, [...SHARED_ITEM_FIELDS, 'categoryId'])) next.sharedAt = now();
+    data.items[id] = next;
     commit();
     return id;
   });
@@ -202,7 +212,7 @@ export function saveItem(fields) {
 export function deleteItem(id) {
   return batch('Deleted', () => {
     remember('items', id);
-    data.items[id] = { id, deleted: true, updatedAt: now() };
+    data.items[id] = { id, deleted: true, categoryId: data.items[id]?.categoryId, updatedAt: now(), sharedAt: now() };
     commit();
   });
 }
@@ -231,7 +241,7 @@ export function addUpdate(id, text) {
     const t = now();
     const update = { id: uid('up'), at: t, text: text.trim() };
     // Adding an update after the date has passed counts as following up.
-    data.items[id] = { ...item, updates: [...(item.updates || []), update], followedUpAt: t, updatedAt: t };
+    data.items[id] = { ...item, updates: [...(item.updates || []), update], followedUpAt: t, updatedAt: t, sharedAt: t };
     commit();
     return update.id;
   });
@@ -242,7 +252,7 @@ export function deleteUpdate(id, updateId) {
     const item = data.items[id];
     if (!item) return;
     remember('items', id);
-    data.items[id] = { ...item, updates: (item.updates || []).filter((u) => u.id !== updateId), updatedAt: now() };
+    data.items[id] = { ...item, updates: (item.updates || []).filter((u) => u.id !== updateId), updatedAt: now(), sharedAt: now() };
     commit();
   });
 }
@@ -282,7 +292,7 @@ export function markAnswered(id, answerNote = '') {
     const item = data.items[id];
     if (!item) return;
     remember('items', id);
-    data.items[id] = { ...item, answeredAt: now(), answerNote, updatedAt: now() };
+    data.items[id] = { ...item, answeredAt: now(), answerNote, updatedAt: now(), sharedAt: now() };
     commit();
   });
 }
@@ -292,7 +302,18 @@ export function unmarkAnswered(id) {
     const item = data.items[id];
     if (!item) return;
     remember('items', id);
-    data.items[id] = { ...item, answeredAt: 0, answerNote: '', updatedAt: now() };
+    data.items[id] = { ...item, answeredAt: 0, answerNote: '', updatedAt: now(), sharedAt: now() };
     commit();
   });
+}
+
+// ---- Shared lists (iCloud) ----
+
+// Changes that arrive from other people. Like a sync merge, they are not
+// undoable; `fn` edits the data and returns whether anything changed.
+export function applyRemote(fn) {
+  if (fn(data)) {
+    write(DATA_KEY, data);
+    emit('remote');
+  }
 }

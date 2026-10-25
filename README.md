@@ -22,6 +22,7 @@ A calm, tidy prayer list that runs as a web app on iPhone and Mac, keeps both in
 - **Follow-ups**: the day after a dated prayer, Today asks *how did it go?*, with Add update, Answered, Tomorrow and Done.
 - **Pins**: put an urgent prayer into every session for 3 days, a week, 2 weeks or until you unpin it. Quick add understands "pray every day this week", "daily for 2 weeks" and `#pin`.
 - **Reminders**: in the iPhone app, a daily push reminder at your chosen time and days, and a follow-up reminder the morning after a dated prayer. Lock-screen text stays private unless you turn on details. The web version offers a repeating calendar event instead.
+- **Shared lists** (iPhone app, through iCloud): share a list with your wife, a prayer partner or a staff team via Messages, Mail or a link. Everyone sees the prayer points, notes, updates and answered prayers, end-to-end encrypted in iCloud; when each person last prayed, pins and how often a list comes up stay personal. Leaving or stopping sharing keeps everyone's copy.
 - **Widgets** (iPhone app): today's prayers on the Home Screen and Lock Screen, and on a Mac desktop straight from the iPhone (macOS Sonoma or later). Names can be hidden; Lock Screen widgets only show counts.
 - **Buttons on reminders** (iPhone app): *Start praying* or *Remind me in 1 hour*; follow-ups offer *Add update* or *Ask tomorrow*. Today's reminder is skipped once you have prayed.
 - **Quiet mode**: the moon button in a prayer session clears the screen down to the prayer, keeps the screen awake, and can run a gentle timer on each card (1, 2, 3 or 5 minutes) that chimes when the time is up.
@@ -92,6 +93,8 @@ npm test        # unit tests for merging, sessions, tags, parsing and encryption
 | `js/crypto.js` | End-to-end encryption for sync (PBKDF2 + AES-GCM) |
 | `js/keystore.js` | Keeps the non-extractable sync key in IndexedDB |
 | `js/notify.js` | Reminders: iPhone notifications, and the calendar fallback |
+| `js/share.js` | Shared lists: what to send to iCloud and how incoming changes merge |
+| `ios/App/App/CloudSharePlugin.swift` | iCloud (CloudKit) zones, sharing sheet and invitations |
 | `js/widget.js` | The snapshot of the coming week that the widgets show |
 | `ios/App/LetsPrayWidget/` | The widget (SwiftUI, WidgetKit) |
 | `ios/` | The Xcode project for the iPhone app (Capacitor) |

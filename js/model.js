@@ -85,6 +85,12 @@ export function fingerprint(data) {
 
 export const live = (rec) => rec && !rec.deleted;
 
+// What everyone sees in a shared list. Everything else on a prayer point
+// (when you last prayed, pins, follow-ups) and on a list (how often it comes
+// up) stays personal.
+export const SHARED_ITEM_FIELDS = ['title', 'notes', 'tags', 'eventAt', 'answeredAt', 'answerNote', 'updates', 'createdAt'];
+export const SHARED_LIST_FIELDS = ['name', 'icon', 'color'];
+
 export function activeCategories(data) {
   return Object.values(data.categories)
     .filter(live)

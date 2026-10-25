@@ -1,5 +1,6 @@
 // Changes the app's identifier everywhere it appears, including the widget
-// (<id>.widget) and the shared App Group (group.<id>) the two use together.
+// (<id>.widget), the shared App Group (group.<id>) the two use together, and
+// the iCloud container for shared lists (iCloud.<id>).
 // Usage: npm run set-app-id -- au.org.yourchurch.letspray
 import { readFileSync, writeFileSync } from 'node:fs';
 
@@ -9,6 +10,7 @@ const FILES = [
   'ios/App/App/Info.plist',
   'ios/App/App/App.entitlements',
   'ios/App/App/WidgetBridgePlugin.swift',
+  'ios/App/App/CloudSharePlugin.swift',
   'ios/App/LetsPrayWidget/LetsPrayWidget.entitlements',
   'ios/App/LetsPrayWidget/LetsPrayWidget.swift',
 ];
